@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use anyhow::Result;
+use azure_core::credentials::TokenCredential;
 use reqwest::Client;
 use uuid::Uuid;
 
@@ -8,23 +11,36 @@ use super::models::*;
 
 const API_VERSION: &str = "2020-10-01";
 const BASE_URL: &str = "https://management.azure.com";
+const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 
-#[derive(Debug)]
 pub struct PimClient {
     client: Client,
-    token: String,
+    credential: Arc<dyn TokenCredential>,
     pub principal_id: String,
     pub subscriptions: Vec<SubscriptionInfo>,
 }
 
 impl PimClient {
-    pub fn new(token: String, principal_id: String, subscriptions: Vec<SubscriptionInfo>) -> Self {
+    pub fn new(
+        credential: Arc<dyn TokenCredential>,
+        principal_id: String,
+        subscriptions: Vec<SubscriptionInfo>,
+    ) -> Self {
         Self {
             client: Client::new(),
-            token,
+            credential,
             principal_id,
             subscriptions,
         }
+    }
+
+    async fn get_token(&self) -> Result<String> {
+        let token_response = self
+            .credential
+            .get_token(&[MANAGEMENT_SCOPE], None)
+            .await
+            .map_err(|e| PimError::Auth(format!("Failed to refresh token: {e}")))?;
+        Ok(token_response.token.secret().to_string())
     }
 
     /// List eligible role schedules at a specific scope, filtered to this principal.
@@ -39,12 +55,13 @@ impl PimClient {
         let base = format!(
             "{BASE_URL}{scope}/providers/Microsoft.Authorization/roleEligibilitySchedules"
         );
+        let token = self.get_token().await?;
 
         let resp = self
             .client
             .get(&base)
             .query(&[("$filter", &filter), ("api-version", &API_VERSION.to_string())])
-            .bearer_auth(&self.token)
+            .bearer_auth(&token)
             .send()
             .await?;
 
@@ -70,12 +87,13 @@ impl PimClient {
         let base = format!(
             "{BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances"
         );
+        let token = self.get_token().await?;
 
         let resp = self
             .client
             .get(&base)
             .query(&[("$filter", &filter), ("api-version", &API_VERSION.to_string())])
-            .bearer_auth(&self.token)
+            .bearer_auth(&token)
             .send()
             .await?;
 
@@ -236,11 +254,12 @@ impl PimClient {
             },
         };
 
+        let token = self.get_token().await?;
         let resp = self
             .client
             .put(&base)
             .query(&[("api-version", API_VERSION)])
-            .bearer_auth(&self.token)
+            .bearer_auth(&token)
             .json(&body)
             .send()
             .await?;
@@ -288,11 +307,12 @@ impl PimClient {
             },
         };
 
+        let token = self.get_token().await?;
         let resp = self
             .client
             .put(&base)
             .query(&[("api-version", API_VERSION)])
-            .bearer_auth(&self.token)
+            .bearer_auth(&token)
             .json(&body)
             .send()
             .await?;

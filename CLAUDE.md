@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build          # compile
-cargo run            # launch TUI (requires `az login` session)
+cargo run            # launch TUI (requires `az login` or `azd auth login` session)
 ```
 
 No test suite exists yet. No linter or formatter configuration beyond default `rustfmt`/`clippy`.
@@ -25,9 +25,9 @@ Async event-driven TUI using ratatui + crossterm + tokio. The app runs a 250ms t
 
 ### Key Data Flow
 
-1. **Auth** — Startup spawns `get_auth_info()` which runs `az account get-access-token`, `az ad signed-in-user show`, and `az account list` in parallel. Result stored as `Arc<AuthData>` and reused for all subsequent operations (no re-auth on refresh).
-2. **Fetch** — `PimClient::fetch_roles()` queries `roleEligibilitySchedules` and `roleAssignmentScheduleInstances` endpoints **per subscription** in parallel using `futures::future::join_all`. Results merge into `Vec<PimRole>` with active status overlay.
-3. **Activate/Deactivate** — Spawns per-role tokio tasks that PUT to `roleAssignmentScheduleRequests`. Uses the **user's** principal ID (from `az ad signed-in-user show`), not the group principal ID from eligibility responses — this distinction matters for group-based PIM eligibility.
+1. **Auth** — Startup spawns `get_auth_info()` which uses `azure_identity::DeveloperToolsCredential` (chains Azure CLI + Azure Developer CLI) to get a token. Principal ID and display name are extracted from JWT claims (`oid`, `upn`). Subscriptions are fetched via REST (`/subscriptions`). The credential object is stored in `Arc<AuthData>` and shared across tasks — it handles token refresh automatically.
+2. **Fetch** — `PimClient::fetch_roles()` queries `roleEligibilitySchedules` and `roleAssignmentScheduleInstances` endpoints **per subscription** in parallel using `futures::future::join_all`. Results merge into `Vec<PimRole>` with active status overlay. Each API call gets a fresh token from the credential.
+3. **Activate/Deactivate** — Spawns per-role tokio tasks that PUT to `roleAssignmentScheduleRequests`. Uses the **user's** principal ID (from JWT `oid` claim), not the group principal ID from eligibility responses — this distinction matters for group-based PIM eligibility.
 
 ### Azure PIM API Details
 

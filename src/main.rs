@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         match auth::get_auth_info().await {
             Ok(info) => {
                 let _ = tx.send(BgEvent::AuthReady(Ok(AuthData {
-                    token: info.token,
+                    credential: info.credential,
                     principal_id: info.principal_id,
                     user_display: info.user_display,
                     subscriptions: info.subscriptions,
@@ -153,7 +153,7 @@ fn spawn_fetch(app: &App) {
     let tx = app.bg_tx.clone();
     tokio::spawn(async move {
         let client = PimClient::new(
-            auth.token.clone(),
+            auth.credential.clone(),
             auth.principal_id.clone(),
             auth.subscriptions.clone(),
         );
@@ -188,7 +188,7 @@ fn handle_modal_action(app: &mut App, action: ModalAction) {
 
                 tokio::spawn(async move {
                     let client = PimClient::new(
-                        auth.token.clone(),
+                        auth.credential.clone(),
                         auth.principal_id.clone(),
                         auth.subscriptions.clone(),
                     );
@@ -215,7 +215,7 @@ fn handle_modal_action(app: &mut App, action: ModalAction) {
 
             tokio::spawn(async move {
                 let client = PimClient::new(
-                    auth.token.clone(),
+                    auth.credential.clone(),
                     auth.principal_id.clone(),
                     auth.subscriptions.clone(),
                 );

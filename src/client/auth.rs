@@ -1,15 +1,14 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
+use azure_core::credentials::TokenCredential;
+use azure_identity::DeveloperToolsCredential;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use serde::Deserialize;
-use std::process::Command;
 
 use super::error::PimError;
 
-#[derive(Debug, Deserialize)]
-struct AzToken {
-    #[serde(alias = "accessToken")]
-    access_token: String,
-}
+const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 
 #[derive(Debug, Deserialize)]
 struct JwtClaims {
@@ -19,7 +18,7 @@ struct JwtClaims {
 }
 
 pub struct AuthInfo {
-    pub token: String,
+    pub credential: Arc<dyn TokenCredential>,
     pub principal_id: String,
     pub user_display: String,
     pub subscriptions: Vec<SubscriptionInfo>,
@@ -27,76 +26,91 @@ pub struct AuthInfo {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubscriptionInfo {
+    #[serde(alias = "subscriptionId")]
     pub id: String,
-    #[serde(alias = "name")]
+    #[serde(alias = "displayName")]
     pub name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ArmSubscription {
+    #[serde(rename = "subscriptionId")]
+    id: String,
+    #[serde(rename = "displayName")]
+    name: String,
+    state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubscriptionListResponse {
+    value: Vec<ArmSubscription>,
+}
+
 pub async fn get_auth_info() -> Result<AuthInfo> {
-    // Run all three az commands in parallel
-    let (token_out, user_out, subs_out) = tokio::try_join!(
-        tokio::task::spawn_blocking(|| {
-            Command::new("az")
-                .args([
-                    "account", "get-access-token",
-                    "--resource", "https://management.azure.com",
-                    "--output", "json",
-                ])
-                .output()
-        }),
-        tokio::task::spawn_blocking(|| {
-            Command::new("az")
-                .args(["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"])
-                .output()
-        }),
-        tokio::task::spawn_blocking(|| {
-            Command::new("az")
-                .args(["account", "list", "--query", "[?state=='Enabled']", "-o", "json"])
-                .output()
-        }),
-    )?;
+    let credential: Arc<dyn TokenCredential> =
+        DeveloperToolsCredential::new(None).context("Failed to create Azure credential")?;
 
-    // Parse token
-    let token_output = token_out.context("Failed to run az account get-access-token")?;
-    if !token_output.status.success() {
-        let stderr = String::from_utf8_lossy(&token_output.stderr);
-        return Err(PimError::Auth(format!(
-            "az CLI failed. Run `az login` first. Error: {stderr}"
-        ))
-        .into());
-    }
-    let token_response: AzToken =
-        serde_json::from_slice(&token_output.stdout).context("Failed to parse az token response")?;
+    // Get a token to extract principal ID and user info from JWT claims
+    let token_response = credential
+        .get_token(&[MANAGEMENT_SCOPE], None)
+        .await
+        .map_err(|e| PimError::Auth(format!("Failed to get token: {e}")))?;
 
-    // Parse principal ID
-    let user_output = user_out.context("Failed to run az ad signed-in-user show")?;
-    if !user_output.status.success() {
-        let stderr = String::from_utf8_lossy(&user_output.stderr);
-        return Err(PimError::Auth(format!("Failed to get user info: {stderr}")).into());
-    }
-    let principal_id = String::from_utf8_lossy(&user_output.stdout).trim().to_string();
+    let token_str = token_response.token.secret();
 
-    // Parse subscriptions
-    let subs_output = subs_out.context("Failed to run az account list")?;
-    let subscriptions: Vec<SubscriptionInfo> = if subs_output.status.success() {
-        serde_json::from_slice(&subs_output.stdout).unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    // Get display name from JWT (lightweight, no extra az call)
-    let claims = decode_jwt_claims(&token_response.access_token)?;
+    // Extract principal ID and display name from JWT
+    let claims = decode_jwt_claims(token_str)?;
+    let principal_id = claims
+        .oid
+        .ok_or_else(|| PimError::Parse("No 'oid' claim in token".to_string()))?;
     let user_display = claims
         .upn
         .or(claims.unique_name)
         .unwrap_or_else(|| "unknown".to_string());
 
+    // Fetch subscriptions via REST (replaces `az account list`)
+    let subscriptions = fetch_subscriptions(token_str)
+        .await
+        .context("Failed to fetch subscriptions")?;
+
     Ok(AuthInfo {
-        token: token_response.access_token,
+        credential,
         principal_id,
         user_display,
         subscriptions,
     })
+}
+
+async fn fetch_subscriptions(token: &str) -> Result<Vec<SubscriptionInfo>> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://management.azure.com/subscriptions")
+        .query(&[("api-version", "2022-12-01")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("Failed to list subscriptions")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(PimError::Api {
+            status: status.as_u16(),
+            message: body,
+        }
+        .into());
+    }
+
+    let body: SubscriptionListResponse = resp.json().await.context("Failed to parse subscriptions")?;
+    Ok(body
+        .value
+        .into_iter()
+        .filter(|s| s.state.as_deref() == Some("Enabled"))
+        .map(|s| SubscriptionInfo {
+            id: s.id,
+            name: s.name,
+        })
+        .collect())
 }
 
 fn decode_jwt_claims(token: &str) -> Result<JwtClaims> {
@@ -105,13 +119,10 @@ fn decode_jwt_claims(token: &str) -> Result<JwtClaims> {
         return Err(PimError::Parse("Invalid JWT format".to_string()).into());
     }
 
-    // JWT base64url uses no padding; the base64 crate's STANDARD_NO_PAD handles
-    // standard base64 without padding. We need to convert base64url to standard first.
     let payload = parts[1].replace('-', "+").replace('_', "/");
     let decoded = STANDARD_NO_PAD
         .decode(&payload)
         .or_else(|_| {
-            // Try with padding
             let padded = match payload.len() % 4 {
                 2 => format!("{payload}=="),
                 3 => format!("{payload}="),

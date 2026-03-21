@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use azure_core::credentials::TokenCredential;
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
@@ -7,15 +8,13 @@ use crate::client::auth::SubscriptionInfo;
 use crate::client::models::{PimRole, RoleStatus};
 use crate::config::Config;
 
-#[derive(Debug, Clone)]
 pub struct AuthData {
-    pub token: String,
+    pub credential: Arc<dyn TokenCredential>,
     pub principal_id: String,
     pub user_display: String,
     pub subscriptions: Vec<SubscriptionInfo>,
 }
 
-#[derive(Debug)]
 pub enum BgEvent {
     RolesLoaded(Result<Vec<PimRole>, String>),
     ActivationResult {
