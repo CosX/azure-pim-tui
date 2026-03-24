@@ -9,7 +9,18 @@ cargo build          # compile
 cargo run            # launch TUI (requires `az login` or `azd auth login` session)
 ```
 
-No test suite exists yet. No linter or formatter configuration beyond default `rustfmt`/`clippy`.
+No test suite exists yet.
+
+## Lint & Format
+
+Run both of these after every code change:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings -A dead_code -A unused
+```
+
+Both must pass cleanly before committing. CI enforces the same checks.
 
 ## Available Skills
 

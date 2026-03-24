@@ -107,7 +107,8 @@ async fn fetch_subscriptions(token: &str) -> Result<Vec<SubscriptionInfo>> {
         .into());
     }
 
-    let body: SubscriptionListResponse = resp.json().await.context("Failed to parse subscriptions")?;
+    let body: SubscriptionListResponse =
+        resp.json().await.context("Failed to parse subscriptions")?;
     Ok(body
         .value
         .into_iter()

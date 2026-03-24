@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>azure-pim-tui</id>
+    <version>{{VERSION}}</version>
+    <title>Azure PIM TUI</title>
+    <authors>Karl Solgård</authors>
+    <projectUrl>https://github.com/CosX/azure-pim-tui</projectUrl>
+    <licenseUrl>https://github.com/CosX/azure-pim-tui/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>A terminal UI for managing Azure Privileged Identity Management (PIM) role activations.
+
+Discover eligible roles across subscriptions and groups, activate or deactivate them, and see permissions — all from the terminal.</description>
+    <summary>Terminal UI for managing Azure PIM role activations.</summary>
+    <tags>azure pim tui terminal cli privileged-identity-management</tags>
+    <releaseNotes>https://github.com/CosX/azure-pim-tui/releases/tag/v{{VERSION}}</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

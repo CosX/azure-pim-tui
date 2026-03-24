@@ -10,6 +10,21 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         return EventAction::None;
     }
 
+    // Detail panel scroll
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('d') => {
+                app.detail_scroll = app.detail_scroll.saturating_add(5);
+                return EventAction::None;
+            }
+            KeyCode::Char('u') => {
+                app.detail_scroll = app.detail_scroll.saturating_sub(5);
+                return EventAction::None;
+            }
+            _ => {}
+        }
+    }
+
     // Filter mode input
     if app.filtering {
         return handle_filter_key(app, key);
@@ -42,7 +57,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         // Activate
         KeyCode::Char('a') | KeyCode::Enter => {
             if let Some(idx) = app.selected_role_index() {
-                let role = &app.roles[idx];
+                let role = &app.active_roles()[idx];
                 if role.status.is_eligible() {
                     app.modal = ActiveModal::Activate {
                         role_index: idx,
@@ -58,7 +73,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         // Deactivate
         KeyCode::Char('d') => {
             if let Some(idx) = app.selected_role_index() {
-                let role = &app.roles[idx];
+                let role = &app.active_roles()[idx];
                 if role.status.is_active() {
                     app.modal = ActiveModal::DeactivateConfirm { role_index: idx };
                 }
@@ -78,7 +93,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             let selected = app.selected_indices();
             let eligible: Vec<usize> = selected
                 .into_iter()
-                .filter(|&i| app.roles[i].status.is_eligible())
+                .filter(|&i| app.active_roles()[i].status.is_eligible())
                 .collect();
             if !eligible.is_empty() {
                 app.modal = ActiveModal::BulkActivate {

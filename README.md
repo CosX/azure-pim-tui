@@ -1,26 +1,62 @@
 # Azure PIM TUI
 
-A terminal UI for managing Azure Privileged Identity Management (PIM) role activations. Discover all your eligible roles across subscriptions and activate them without leaving the terminal.
+Activate Azure PIM roles from your terminal. No portal clicking, no context switching.
 
 ![Rust](https://img.shields.io/badge/rust-2021-orange) ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## Features
+## What it does
 
-- **Auto-discovery** — finds all eligible PIM roles across every subscription in your tenant
-- **Activate / deactivate** — single role or bulk select multiple roles
-- **Live status** — shows active roles with countdown timers, auto-refreshes in the background
-- **Filter & search** — cycle views (all/eligible/active) or search by name
-- **Configurable defaults** — justification and duration pre-filled from config
+- Finds all your eligible PIM roles across subscriptions and groups
+- Activate or deactivate roles, one at a time or in bulk
+- Shows which roles are active and how long they have left
+- Displays role permissions in a side-by-side detail panel
+- Filter by name or switch between all/eligible/active views
+- Reads justification and duration defaults from a config file
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/)
-- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) — authenticated via `az login`
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) — logged in via `az login`
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
 ```bash
-git clone https://github.com/your-user/azure-pim-tui.git
+brew install CosX/tap/azure-pim-tui
+```
+
+### Winget (Windows)
+
+```bash
+winget install CosX.AzurePimTui
+```
+
+### Chocolatey (Windows)
+
+```bash
+choco install azure-pim-tui
+```
+
+### cargo-binstall (pre-built binary)
+
+```bash
+cargo binstall azure-pim-tui
+```
+
+### cargo install (build from source)
+
+```bash
+cargo install azure-pim-tui
+```
+
+### Pre-built binaries
+
+Grab a binary for your platform from the [latest release](https://github.com/CosX/azure-pim-tui/releases/latest).
+
+### Build from source
+
+```bash
+git clone https://github.com/CosX/azure-pim-tui.git
 cd azure-pim-tui
 cargo install --path .
 ```
@@ -36,29 +72,24 @@ azure-pim-tui
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` / `↑` / `↓` | Navigate |
-| `g` / `G` | First / last |
-| `a` / `Enter` | Activate selected role |
-| `d` | Deactivate selected role |
-| `Space` | Toggle selection (for bulk) |
-| `A` | Bulk activate all selected |
+| `j` / `k` / arrows | Navigate |
+| `g` / `G` | Jump to first / last |
+| `a` / `Enter` | Activate role |
+| `d` | Deactivate role |
+| `Space` | Toggle selection for bulk ops |
+| `A` | Bulk activate selected |
 | `r` / `F5` | Refresh |
-| `/` | Filter by name |
+| `/` | Search by name |
 | `v` | Cycle view: all / eligible / active |
+| `Ctrl+d` / `Ctrl+u` | Scroll detail panel |
 | `?` | Help |
 | `q` / `Ctrl+C` | Quit |
 
-### Activation modal
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Switch between justification / duration fields |
-| `Enter` | Confirm activation |
-| `Esc` | Cancel |
+In the activation modal: `Tab` switches fields, `Enter` confirms, `Esc` cancels.
 
 ## Configuration
 
-Config is created automatically on first run at `~/.config/azure-pim-tui/config.toml`:
+A config file is created on first run at `~/.config/azure-pim-tui/config.toml`:
 
 ```toml
 default_justification = "Local development"
@@ -68,12 +99,12 @@ auto_refresh_secs = 60
 
 ## How it works
 
-1. Authenticates using your existing `az login` session (no credentials stored)
-2. Queries `roleEligibilitySchedules` across all subscriptions to discover eligible roles
-3. Queries `roleAssignmentScheduleInstances` to determine which are currently active
-4. Activations/deactivations go through the `roleAssignmentScheduleRequests` API
+1. Authenticates with your existing `az login` session (nothing stored)
+2. Queries eligible roles and active assignments across all your subscriptions
+3. Fetches role permissions in the background so you can see what each role allows
+4. Activations and deactivations hit the ARM or Graph API depending on the role type
 
-All API calls use scoped endpoints with `assignedTo()` filters, which correctly resolves group-based PIM eligibility.
+API calls use scoped endpoints with `assignedTo()` filters, so group-based eligibility works correctly.
 
 ## License
 

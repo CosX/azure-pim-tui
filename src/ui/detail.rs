@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::app::{App, Pane};
-use crate::client::models::RoleStatus;
+use crate::client::models::{RoleStatus, RoleType};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let content = if let Some(role) = app.selected_role() {
@@ -28,9 +28,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             vec![Line::from(vec![
                 Span::styled(
                     "Error: ",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(msg.clone(), Style::default().fg(Color::Red)),
             ])]
@@ -60,10 +58,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                     Span::raw(&role.scope),
                 ]),
                 Line::from(vec![
-                    Span::styled(
-                        "Display: ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled("Display: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw(&role.scope_display_name),
                 ]),
             ]
@@ -82,6 +77,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             ),
         ]));
         lines.extend(error_line);
+
+        // Show permissions for resource roles
+        if role.role_type == RoleType::Resource {
+            if let Some(actions) = app.role_permissions.get(&role.role_definition_id) {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Permissions:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                for action in actions {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {action}"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+            }
+        }
+
         lines
     } else {
         vec![Line::from(Span::styled(
@@ -96,12 +109,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         Color::Cyan
     };
 
-    let paragraph = Paragraph::new(content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Details ")
-            .border_style(Style::default().fg(border_color)),
-    );
+    let paragraph = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Details ")
+                .border_style(Style::default().fg(border_color)),
+        )
+        .scroll((app.detail_scroll as u16, 0));
 
     f.render_widget(paragraph, area);
 }

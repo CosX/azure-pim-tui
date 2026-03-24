@@ -31,8 +31,7 @@ impl GroupPimClient {
     }
 
     pub async fn fetch_group_roles(&self) -> Result<Vec<PimRole>> {
-        let (eligible, active) =
-            tokio::join!(self.list_eligible(), self.list_active());
+        let (eligible, active) = tokio::join!(self.list_eligible(), self.list_active());
 
         let eligible = match eligible {
             Ok(e) => {
@@ -64,7 +63,10 @@ impl GroupPimClient {
             .into_iter()
             .collect();
 
-        let group_names = self.resolve_group_names(&group_ids).await.unwrap_or_default();
+        let group_names = self
+            .resolve_group_names(&group_ids)
+            .await
+            .unwrap_or_default();
 
         let mut roles: Vec<PimRole> = eligible
             .into_iter()
@@ -190,8 +192,11 @@ impl GroupPimClient {
 
             let resp = self
                 .client
-                .get(&format!("{GRAPH_BASE}/groups"))
-                .query(&[("$filter", &filter), ("$select", &"id,displayName".to_string())])
+                .get(format!("{GRAPH_BASE}/groups"))
+                .query(&[
+                    ("$filter", &filter),
+                    ("$select", &"id,displayName".to_string()),
+                ])
                 .bearer_auth(&token)
                 .send()
                 .await?;

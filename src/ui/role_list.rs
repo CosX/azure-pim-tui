@@ -50,18 +50,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             };
 
             let status_span = match &role.status {
-                RoleStatus::Eligible => {
-                    Span::styled("Eligible", Style::default().fg(Color::Gray))
-                }
+                RoleStatus::Eligible => Span::styled("Eligible", Style::default().fg(Color::Gray)),
                 RoleStatus::Active { .. } => {
                     Span::styled("Active", Style::default().fg(Color::Green))
                 }
                 RoleStatus::Activating => {
                     Span::styled("Activating", Style::default().fg(Color::Yellow))
                 }
-                RoleStatus::Failed(_) => {
-                    Span::styled("Failed", Style::default().fg(Color::Red))
-                }
+                RoleStatus::Failed(_) => Span::styled("Failed", Style::default().fg(Color::Red)),
             };
 
             let expires = match &role.status {

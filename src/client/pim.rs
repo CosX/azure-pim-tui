@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -48,19 +49,18 @@ impl PimClient {
         &self,
         scope: &str,
     ) -> Result<Vec<RoleEligibilityScheduleInstance>> {
-        let filter = format!(
-            "assignedTo('{}') and atScope()",
-            self.principal_id
-        );
-        let base = format!(
-            "{BASE_URL}{scope}/providers/Microsoft.Authorization/roleEligibilitySchedules"
-        );
+        let filter = format!("assignedTo('{}') and atScope()", self.principal_id);
+        let base =
+            format!("{BASE_URL}{scope}/providers/Microsoft.Authorization/roleEligibilitySchedules");
         let token = self.get_token().await?;
 
         let resp = self
             .client
             .get(&base)
-            .query(&[("$filter", &filter), ("api-version", &API_VERSION.to_string())])
+            .query(&[
+                ("$filter", &filter),
+                ("api-version", &API_VERSION.to_string()),
+            ])
             .bearer_auth(&token)
             .send()
             .await?;
@@ -70,8 +70,7 @@ impl PimClient {
         }
 
         let text = resp.text().await?;
-        let body: ApiListResponse<RoleEligibilityScheduleInstance> =
-            serde_json::from_str(&text)?;
+        let body: ApiListResponse<RoleEligibilityScheduleInstance> = serde_json::from_str(&text)?;
         Ok(body.value)
     }
 
@@ -80,10 +79,7 @@ impl PimClient {
         &self,
         scope: &str,
     ) -> Result<Vec<RoleAssignmentScheduleInstance>> {
-        let filter = format!(
-            "assignedTo('{}') and atScope()",
-            self.principal_id
-        );
+        let filter = format!("assignedTo('{}') and atScope()", self.principal_id);
         let base = format!(
             "{BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances"
         );
@@ -92,7 +88,10 @@ impl PimClient {
         let resp = self
             .client
             .get(&base)
-            .query(&[("$filter", &filter), ("api-version", &API_VERSION.to_string())])
+            .query(&[
+                ("$filter", &filter),
+                ("api-version", &API_VERSION.to_string()),
+            ])
             .bearer_auth(&token)
             .send()
             .await?;
@@ -102,8 +101,7 @@ impl PimClient {
         }
 
         let text = resp.text().await?;
-        let body: ApiListResponse<RoleAssignmentScheduleInstance> =
-            serde_json::from_str(&text)?;
+        let body: ApiListResponse<RoleAssignmentScheduleInstance> = serde_json::from_str(&text)?;
         Ok(body.value)
     }
 
@@ -116,7 +114,10 @@ impl PimClient {
             .collect();
 
         if scopes.is_empty() {
-            return Err(PimError::Other("No subscriptions found. Run `az login` first.".to_string()).into());
+            return Err(PimError::Other(
+                "No subscriptions found. Run `az login` first.".to_string(),
+            )
+            .into());
         }
 
         // Query eligibility + active assignments for all scopes in parallel
@@ -291,6 +292,44 @@ impl PimClient {
         Ok(())
     }
 
+    pub async fn fetch_role_permissions(
+        &self,
+        role_definition_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<String>>> {
+        let token = self.get_token().await?;
+        let futs = role_definition_ids.into_iter().map(|id| {
+            let client = self.client.clone();
+            let token = token.clone();
+            async move {
+                let url = format!("{BASE_URL}{id}");
+                let resp = client
+                    .get(&url)
+                    .query(&[("api-version", "2022-04-01")])
+                    .bearer_auth(&token)
+                    .send()
+                    .await;
+                let actions = match resp {
+                    Ok(r) if r.status().is_success() => {
+                        let text = r.text().await.unwrap_or_default();
+                        serde_json::from_str::<RoleDefinitionResponse>(&text)
+                            .map(|def| {
+                                def.properties
+                                    .permissions
+                                    .into_iter()
+                                    .flat_map(|p| p.actions)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    }
+                    _ => vec![],
+                };
+                (id, actions)
+            }
+        });
+        let results = futures::future::join_all(futs).await;
+        Ok(results.into_iter().collect())
+    }
+
     pub async fn deactivate_role(&self, role: &PimRole) -> Result<()> {
         let request_id = Uuid::new_v4().to_string();
         let base = format!(
@@ -344,7 +383,10 @@ impl PimClient {
 /// Extract subscription ID from a scope string like /subscriptions/{id}/...
 fn extract_sub_id(scope: &str) -> Option<&str> {
     let parts: Vec<&str> = scope.split('/').collect();
-    parts.iter().position(|&p| p == "subscriptions").and_then(|i| parts.get(i + 1).copied())
+    parts
+        .iter()
+        .position(|&p| p == "subscriptions")
+        .and_then(|i| parts.get(i + 1).copied())
 }
 
 fn extract_scope_name(scope: &str) -> String {

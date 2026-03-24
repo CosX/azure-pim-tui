@@ -60,6 +60,26 @@ pub struct RoleDefinitionInfo {
     pub display_name: Option<String>,
 }
 
+// --- Role definition (full, for permissions) ---
+
+#[derive(Debug, Deserialize)]
+pub struct RoleDefinitionResponse {
+    pub properties: RoleDefinitionProperties,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleDefinitionProperties {
+    pub permissions: Vec<RolePermission>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RolePermission {
+    pub actions: Vec<String>,
+    pub not_actions: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScopeInfo {

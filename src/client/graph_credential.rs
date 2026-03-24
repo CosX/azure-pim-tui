@@ -110,7 +110,10 @@ impl GraphCredential {
 
             // Token still valid (with 5 min buffer)
             if now + 300 < token.expires_at {
-                debug!("Using cached Graph token (expires in {}s)", token.expires_at - now);
+                debug!(
+                    "Using cached Graph token (expires in {}s)",
+                    token.expires_at - now
+                );
                 return Ok(token.access_token.clone());
             }
 
@@ -163,7 +166,10 @@ impl GraphCredential {
             return Err(PimError::Auth(format!("Token refresh failed: {body}")).into());
         }
 
-        let token_resp: TokenResponse = resp.json().await.context("Failed to parse token response")?;
+        let token_resp: TokenResponse = resp
+            .json()
+            .await
+            .context("Failed to parse token response")?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -171,7 +177,9 @@ impl GraphCredential {
 
         Ok(CachedToken {
             access_token: token_resp.access_token,
-            refresh_token: token_resp.refresh_token.or_else(|| Some(refresh_token.to_string())),
+            refresh_token: token_resp
+                .refresh_token
+                .or_else(|| Some(refresh_token.to_string())),
             expires_at: now + token_resp.expires_in,
         })
     }
@@ -187,10 +195,7 @@ impl GraphCredential {
         let resp = self
             .client
             .post(&device_code_url)
-            .form(&[
-                ("client_id", CLIENT_ID),
-                ("scope", GRAPH_SCOPES),
-            ])
+            .form(&[("client_id", CLIENT_ID), ("scope", GRAPH_SCOPES)])
             .send()
             .await
             .context("Failed to initiate device code flow")?;
@@ -200,7 +205,10 @@ impl GraphCredential {
             return Err(PimError::Auth(format!("Device code request failed: {body}")).into());
         }
 
-        let dc_resp: DeviceCodeResponse = resp.json().await.context("Failed to parse device code response")?;
+        let dc_resp: DeviceCodeResponse = resp
+            .json()
+            .await
+            .context("Failed to parse device code response")?;
 
         // Notify the TUI to display the code
         self.send_status(dc_resp.message.clone());
@@ -213,8 +221,8 @@ impl GraphCredential {
         );
 
         let interval = std::time::Duration::from_secs(dc_resp.interval.max(5));
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(dc_resp.expires_in);
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(dc_resp.expires_in);
 
         loop {
             if std::time::Instant::now() > deadline {
@@ -267,7 +275,7 @@ impl GraphCredential {
                     }
                     "expired_token" => {
                         return Err(
-                            PimError::Auth("Device code expired. Try again.".to_string()).into()
+                            PimError::Auth("Device code expired. Try again.".to_string()).into(),
                         );
                     }
                     _ => {

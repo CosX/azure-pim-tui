@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use azure_core::credentials::TokenCredential;
@@ -29,6 +30,7 @@ pub enum BgEvent {
         result: Result<(), String>,
     },
     AuthReady(Result<AuthData, String>),
+    RolePermissionsLoaded(Result<HashMap<String, Vec<String>>, String>),
     /// Status message from graph credential (device code flow)
     GraphStatus(String),
 }
@@ -133,6 +135,8 @@ pub struct App {
     pub config: Config,
     pub auth: Option<Arc<AuthData>>,
     pub last_refresh: Option<DateTime<Utc>>,
+    pub role_permissions: HashMap<String, Vec<String>>,
+    pub detail_scroll: usize,
 }
 
 impl App {
@@ -160,6 +164,8 @@ impl App {
             config,
             auth: None,
             last_refresh: None,
+            role_permissions: HashMap::new(),
+            detail_scroll: 0,
         }
     }
 
@@ -198,6 +204,7 @@ impl App {
     pub fn switch_pane(&mut self) {
         self.active_pane = self.active_pane.toggle();
         self.selected = 0;
+        self.detail_scroll = 0;
         self.filter_text.clear();
         self.update_filtered_indices();
     }
@@ -252,16 +259,19 @@ impl App {
         let len = self.filtered_indices.len() as i32;
         let new = (self.selected as i32 + delta).rem_euclid(len);
         self.selected = new as usize;
+        self.detail_scroll = 0;
     }
 
     pub fn select_first(&mut self) {
         self.selected = 0;
+        self.detail_scroll = 0;
     }
 
     pub fn select_last(&mut self) {
         if !self.filtered_indices.is_empty() {
             self.selected = self.filtered_indices.len() - 1;
         }
+        self.detail_scroll = 0;
     }
 
     pub fn toggle_selected(&mut self) {
@@ -383,20 +393,21 @@ impl App {
                             }
                         }
                     }
-                    Err(e) => {
-                        match self.active_pane {
-                            Pane::Resources => {
-                                self.status_message = format!("Deactivation failed: {e}");
-                            }
-                            Pane::Groups => {
-                                self.group_status_message =
-                                    format!("Deactivation failed: {e}");
-                            }
+                    Err(e) => match self.active_pane {
+                        Pane::Resources => {
+                            self.status_message = format!("Deactivation failed: {e}");
                         }
-                    }
+                        Pane::Groups => {
+                            self.group_status_message = format!("Deactivation failed: {e}");
+                        }
+                    },
                 }
                 self.update_filtered_indices();
             }
+            BgEvent::RolePermissionsLoaded(Ok(perms)) => {
+                self.role_permissions.extend(perms);
+            }
+            BgEvent::RolePermissionsLoaded(Err(_)) => {}
             BgEvent::GraphStatus(msg) => {
                 self.group_status_message = msg;
             }

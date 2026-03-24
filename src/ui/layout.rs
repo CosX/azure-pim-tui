@@ -13,8 +13,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
     let chunks = Layout::vertical([
         Constraint::Length(3), // Title bar
-        Constraint::Min(8),   // Role list
-        Constraint::Length(8), // Detail panel (extra line for Type)
+        Constraint::Min(8),    // Content area
         Constraint::Length(1), // Status bar
     ])
     .split(size);
@@ -22,14 +21,15 @@ pub fn render(f: &mut Frame, app: &App) {
     // Title bar
     render_title_bar(f, chunks[0], app);
 
-    // Role list
-    crate::ui::role_list::render(f, chunks[1], app);
+    // Content area: role list (left) | detail panel (right)
+    let content = Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
 
-    // Detail panel
-    crate::ui::detail::render(f, chunks[2], app);
+    crate::ui::role_list::render(f, content[0], app);
+    crate::ui::detail::render(f, content[1], app);
 
     // Status bar
-    crate::ui::status_bar::render(f, chunks[3], app);
+    crate::ui::status_bar::render(f, chunks[2], app);
 
     // Modal overlay
     if app.modal != ActiveModal::None {

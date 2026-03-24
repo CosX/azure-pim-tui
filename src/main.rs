@@ -55,10 +55,8 @@ async fn main() -> Result<()> {
                     }
                 });
 
-                let graph_credential = Arc::new(GraphCredential::new(
-                    info.tenant_id,
-                    Some(status_tx),
-                ));
+                let graph_credential =
+                    Arc::new(GraphCredential::new(info.tenant_id, Some(status_tx)));
 
                 let _ = tx.send(BgEvent::AuthReady(Ok(AuthData {
                     credential: info.credential,
@@ -104,6 +102,7 @@ async fn run_app(
     let mut last_tick = Instant::now();
     let mut last_refresh = Instant::now();
     let mut needs_fetch = false;
+    let mut needs_permissions_fetch = false;
 
     loop {
         terminal.draw(|f| ui::layout::render(f, app))?;
@@ -111,9 +110,13 @@ async fn run_app(
         // Process background events (non-blocking)
         while let Ok(bg_event) = app.bg_rx.try_recv() {
             let should_fetch = matches!(bg_event, BgEvent::AuthReady(Ok(_)));
+            let roles_loaded = matches!(bg_event, BgEvent::RolesLoaded(Ok(_)));
             app.handle_bg_event(bg_event);
             if should_fetch {
                 needs_fetch = true;
+            }
+            if roles_loaded {
+                needs_permissions_fetch = true;
             }
         }
 
@@ -121,6 +124,12 @@ async fn run_app(
         if needs_fetch {
             spawn_fetch_resources(app);
             needs_fetch = false;
+        }
+
+        // Trigger permissions fetch after roles load
+        if needs_permissions_fetch {
+            spawn_fetch_permissions(app);
+            needs_permissions_fetch = false;
         }
 
         // Trigger group fetch on first visit to Groups pane
@@ -197,6 +206,40 @@ fn spawn_fetch_resources(app: &App) {
     });
 }
 
+fn spawn_fetch_permissions(app: &App) {
+    let auth = match &app.auth {
+        Some(a) => a.clone(),
+        None => return,
+    };
+
+    let ids: Vec<String> = app
+        .roles
+        .iter()
+        .filter(|r| r.role_type == RoleType::Resource && !r.role_definition_id.is_empty())
+        .map(|r| r.role_definition_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .filter(|id| !app.role_permissions.contains_key(id))
+        .collect();
+
+    if ids.is_empty() {
+        return;
+    }
+
+    let tx = app.bg_tx.clone();
+    tokio::spawn(async move {
+        let client = PimClient::new(
+            auth.credential.clone(),
+            auth.principal_id.clone(),
+            auth.subscriptions.clone(),
+        );
+        let result = client.fetch_role_permissions(ids).await;
+        let _ = tx.send(BgEvent::RolePermissionsLoaded(
+            result.map_err(|e| e.to_string()),
+        ));
+    });
+}
+
 fn spawn_fetch_groups(app: &mut App) {
     let auth = match &app.auth {
         Some(a) => a.clone(),
@@ -208,10 +251,7 @@ fn spawn_fetch_groups(app: &mut App) {
 
     let tx = app.bg_tx.clone();
     tokio::spawn(async move {
-        let client = GroupPimClient::new(
-            auth.graph_credential.clone(),
-            auth.principal_id.clone(),
-        );
+        let client = GroupPimClient::new(auth.graph_credential.clone(), auth.principal_id.clone());
         let result = client.fetch_group_roles().await;
         let _ = tx.send(BgEvent::GroupRolesLoaded(result.map_err(|e| e.to_string())));
     });

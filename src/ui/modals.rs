@@ -80,13 +80,17 @@ fn render_activate_modal(
     };
 
     let just_style = if *focused == ModalField::Justification {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
 
     let dur_style = if *focused == ModalField::Duration {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -111,7 +115,10 @@ fn render_activate_modal(
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("Justification: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Justification: ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!(
                 "[{justification}{}]",
@@ -125,7 +132,10 @@ fn render_activate_modal(
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Duration (hrs): ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Duration (hrs): ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!(
                 "[{duration}{}]",

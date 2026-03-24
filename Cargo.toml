@@ -2,23 +2,74 @@
 name = "azure-pim-tui"
 version = "0.1.0"
 edition = "2021"
+authors = ["Karl Solgård <karl@solgard.solutions>"]
+description = "A terminal UI for managing Azure PIM role activations"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/CosX/azure-pim-tui"
+homepage = "https://github.com/CosX/azure-pim-tui"
+documentation = "https://github.com/CosX/azure-pim-tui"
+keywords = ["azure", "pim", "tui", "terminal", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    "target/",
+    ".github/",
+    ".git/",
+    "*.sh",
+]
+
+[features]
+vendored-tls = ["dep:openssl-sys"]
 
 [dependencies]
+# Vendored OpenSSL for cross-compilation (behind feature flag)
+openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
+
+# TUI
 ratatui = "0.30"
 crossterm = "0.29"
+
+# Async runtime
 tokio = { version = "1", features = ["full"] }
+
+# HTTP client
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+# Azure AD authentication
+azure_identity = "0.33"
+azure_core = "0.33"
+
+# Time
 chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
 anyhow = "1"
 thiserror = "2"
+
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 base64 = "0.22"
 futures = "0.3"
-azure_identity = "0.33"
-azure_core = "0.33"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"

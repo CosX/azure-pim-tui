@@ -30,7 +30,9 @@ pub fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalAction> {
             KeyCode::Enter => {
                 let justification = justification.clone();
                 let duration = duration.clone();
-                let dur_hours: u32 = duration.parse().unwrap_or(app.config.default_duration_hours);
+                let dur_hours: u32 = duration
+                    .parse()
+                    .unwrap_or(app.config.default_duration_hours);
 
                 match &app.modal {
                     ActiveModal::Activate { role_index, .. } => {
