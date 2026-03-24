@@ -7,25 +7,52 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
-use crate::client::models::RoleStatus;
+use crate::app::{App, Pane};
+use crate::client::models::{RoleStatus, RoleType};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let header = Row::new(vec!["", "Role", "Scope", "Status", "Expires"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+    let is_groups = app.active_pane == Pane::Groups;
+
+    let header_cols = if is_groups {
+        vec!["", "Group", "Access", "Status", "Expires"]
+    } else {
+        vec!["", "Role", "Scope", "Status", "Expires"]
+    };
+
+    let header = Row::new(header_cols)
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .bottom_margin(0);
+
+    let roles = app.active_roles();
 
     let rows: Vec<Row> = app
         .filtered_indices
         .iter()
         .enumerate()
         .map(|(display_idx, &role_idx)| {
-            let role = &app.roles[role_idx];
+            let role = &roles[role_idx];
 
             let selector = if role.selected { "●" } else { " " };
 
+            let (col1, col2) = if is_groups {
+                let access = match role.role_type {
+                    RoleType::GroupOwner => "Owner",
+                    RoleType::GroupMember => "Member",
+                    _ => "",
+                };
+                (role.role_name.clone(), access.to_string())
+            } else {
+                (role.role_name.clone(), role.scope_display_name.clone())
+            };
+
             let status_span = match &role.status {
-                RoleStatus::Eligible => Span::styled("Eligible", Style::default().fg(Color::Gray)),
+                RoleStatus::Eligible => {
+                    Span::styled("Eligible", Style::default().fg(Color::Gray))
+                }
                 RoleStatus::Active { .. } => {
                     Span::styled("Active", Style::default().fg(Color::Green))
                 }
@@ -63,8 +90,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
             Row::new(vec![
                 Line::from(selector),
-                Line::from(role.role_name.clone()),
-                Line::from(role.scope_display_name.clone()),
+                Line::from(col1),
+                Line::from(col2),
                 Line::from(status_span),
                 Line::from(expires),
             ])
@@ -74,16 +101,23 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let widths = [
         ratatui::layout::Constraint::Length(2),
-        ratatui::layout::Constraint::Percentage(30),
-        ratatui::layout::Constraint::Percentage(30),
+        ratatui::layout::Constraint::Percentage(35),
+        ratatui::layout::Constraint::Percentage(25),
         ratatui::layout::Constraint::Length(12),
         ratatui::layout::Constraint::Length(10),
     ];
 
+    let pane_label = app.active_pane.label();
     let title = if app.filter_text.is_empty() {
-        " Roles ".to_string()
+        format!(" {pane_label} ")
     } else {
-        format!(" Roles [/{}] ", app.filter_text)
+        format!(" {pane_label} [/{}] ", app.filter_text)
+    };
+
+    let border_color = if is_groups {
+        Color::Magenta
+    } else {
+        Color::Cyan
     };
 
     let table = Table::new(rows, widths)
@@ -92,7 +126,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(title)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(border_color)),
         )
         .row_highlight_style(Style::default().bg(Color::DarkGray));
 

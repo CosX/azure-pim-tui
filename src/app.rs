@@ -5,11 +5,13 @@ use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
 use crate::client::auth::SubscriptionInfo;
+use crate::client::graph_credential::GraphCredential;
 use crate::client::models::{PimRole, RoleStatus};
 use crate::config::Config;
 
 pub struct AuthData {
     pub credential: Arc<dyn TokenCredential>,
+    pub graph_credential: Arc<GraphCredential>,
     pub principal_id: String,
     pub user_display: String,
     pub subscriptions: Vec<SubscriptionInfo>,
@@ -17,6 +19,7 @@ pub struct AuthData {
 
 pub enum BgEvent {
     RolesLoaded(Result<Vec<PimRole>, String>),
+    GroupRolesLoaded(Result<Vec<PimRole>, String>),
     ActivationResult {
         index: usize,
         result: Result<(), String>,
@@ -26,6 +29,30 @@ pub enum BgEvent {
         result: Result<(), String>,
     },
     AuthReady(Result<AuthData, String>),
+    /// Status message from graph credential (device code flow)
+    GraphStatus(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pane {
+    Resources,
+    Groups,
+}
+
+impl Pane {
+    pub fn label(&self) -> &str {
+        match self {
+            Pane::Resources => "Resources",
+            Pane::Groups => "Groups",
+        }
+    }
+
+    pub fn toggle(&self) -> Self {
+        match self {
+            Pane::Resources => Pane::Groups,
+            Pane::Groups => Pane::Resources,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +108,16 @@ pub enum ModalField {
 }
 
 pub struct App {
+    // Resource roles
     pub roles: Vec<PimRole>,
+    // Group roles
+    pub group_roles: Vec<PimRole>,
+    pub groups_loaded: bool,
+    pub groups_loading: bool,
+    pub group_status_message: String,
+
+    // Shared UI state
+    pub active_pane: Pane,
     pub filtered_indices: Vec<usize>,
     pub selected: usize,
     pub view_filter: ViewFilter,
@@ -104,6 +140,11 @@ impl App {
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
         Self {
             roles: Vec::new(),
+            group_roles: Vec::new(),
+            groups_loaded: false,
+            groups_loading: false,
+            group_status_message: "Press Tab to load groups".to_string(),
+            active_pane: Pane::Resources,
             filtered_indices: Vec::new(),
             selected: 0,
             view_filter: ViewFilter::All,
@@ -122,9 +163,53 @@ impl App {
         }
     }
 
+    /// Returns the role list for the active pane
+    pub fn active_roles(&self) -> &[PimRole] {
+        match self.active_pane {
+            Pane::Resources => &self.roles,
+            Pane::Groups => &self.group_roles,
+        }
+    }
+
+    /// Returns a mutable reference to the role list for the active pane
+    pub fn active_roles_mut(&mut self) -> &mut Vec<PimRole> {
+        match self.active_pane {
+            Pane::Resources => &mut self.roles,
+            Pane::Groups => &mut self.group_roles,
+        }
+    }
+
+    /// Returns the status message for the active pane
+    pub fn active_status(&self) -> &str {
+        match self.active_pane {
+            Pane::Resources => &self.status_message,
+            Pane::Groups => &self.group_status_message,
+        }
+    }
+
+    /// Is the active pane loading?
+    pub fn active_loading(&self) -> bool {
+        match self.active_pane {
+            Pane::Resources => self.loading,
+            Pane::Groups => self.groups_loading,
+        }
+    }
+
+    pub fn switch_pane(&mut self) {
+        self.active_pane = self.active_pane.toggle();
+        self.selected = 0;
+        self.filter_text.clear();
+        self.update_filtered_indices();
+    }
+
+    /// Returns true if groups need to be fetched (first visit)
+    pub fn needs_group_fetch(&self) -> bool {
+        self.active_pane == Pane::Groups && !self.groups_loaded && !self.groups_loading
+    }
+
     pub fn update_filtered_indices(&mut self) {
-        self.filtered_indices = self
-            .roles
+        let roles = self.active_roles();
+        self.filtered_indices = roles
             .iter()
             .enumerate()
             .filter(|(_, role)| {
@@ -153,7 +238,7 @@ impl App {
     pub fn selected_role(&self) -> Option<&PimRole> {
         self.filtered_indices
             .get(self.selected)
-            .and_then(|&i| self.roles.get(i))
+            .and_then(|&i| self.active_roles().get(i))
     }
 
     pub fn selected_role_index(&self) -> Option<usize> {
@@ -181,12 +266,12 @@ impl App {
 
     pub fn toggle_selected(&mut self) {
         if let Some(&i) = self.filtered_indices.get(self.selected) {
-            self.roles[i].selected = !self.roles[i].selected;
+            self.active_roles_mut()[i].selected = !self.active_roles_mut()[i].selected;
         }
     }
 
     pub fn selected_indices(&self) -> Vec<usize> {
-        self.roles
+        self.active_roles()
             .iter()
             .enumerate()
             .filter(|(_, r)| r.selected)
@@ -195,11 +280,17 @@ impl App {
     }
 
     pub fn eligible_count(&self) -> usize {
-        self.roles.iter().filter(|r| r.status.is_eligible()).count()
+        self.active_roles()
+            .iter()
+            .filter(|r| r.status.is_eligible())
+            .count()
     }
 
     pub fn active_count(&self) -> usize {
-        self.roles.iter().filter(|r| r.status.is_active()).count()
+        self.active_roles()
+            .iter()
+            .filter(|r| r.status.is_active())
+            .count()
     }
 
     pub fn handle_bg_event(&mut self, event: BgEvent) {
@@ -208,7 +299,6 @@ impl App {
                 self.user_display = auth_data.user_display.clone();
                 self.auth = Some(Arc::new(auth_data));
                 self.status_message = "Fetching roles...".to_string();
-                self.spawn_fetch_roles();
             }
             BgEvent::AuthReady(Err(e)) => {
                 self.loading = false;
@@ -216,7 +306,9 @@ impl App {
             }
             BgEvent::RolesLoaded(Ok(roles)) => {
                 self.roles = roles;
-                self.update_filtered_indices();
+                if self.active_pane == Pane::Resources {
+                    self.update_filtered_indices();
+                }
                 self.loading = false;
                 self.last_refresh = Some(Utc::now());
                 self.status_message = "Ready".to_string();
@@ -225,46 +317,89 @@ impl App {
                 self.loading = false;
                 self.status_message = format!("Failed to load roles: {e}");
             }
+            BgEvent::GroupRolesLoaded(Ok(roles)) => {
+                self.group_roles = roles;
+                self.groups_loaded = true;
+                self.groups_loading = false;
+                self.group_status_message = "Ready".to_string();
+                if self.active_pane == Pane::Groups {
+                    self.update_filtered_indices();
+                }
+            }
+            BgEvent::GroupRolesLoaded(Err(e)) => {
+                self.groups_loading = false;
+                self.group_status_message = format!("Failed: {e}");
+            }
             BgEvent::ActivationResult { index, result } => {
+                let roles = self.active_roles_mut();
                 match result {
                     Ok(()) => {
-                        if let Some(role) = self.roles.get_mut(index) {
+                        if let Some(role) = roles.get_mut(index) {
                             role.status = RoleStatus::Activating;
                             role.selected = false;
                         }
-                        self.status_message = "Activation requested - refreshing...".to_string();
-                        self.spawn_fetch_roles();
+                        match self.active_pane {
+                            Pane::Resources => {
+                                self.status_message =
+                                    "Activation requested - refreshing...".to_string();
+                            }
+                            Pane::Groups => {
+                                self.group_status_message =
+                                    "Activation requested - refreshing...".to_string();
+                            }
+                        }
                     }
                     Err(e) => {
-                        if let Some(role) = self.roles.get_mut(index) {
+                        if let Some(role) = roles.get_mut(index) {
                             role.status = RoleStatus::Failed(e.clone());
                         }
-                        self.status_message = format!("Activation failed: {e}");
+                        match self.active_pane {
+                            Pane::Resources => {
+                                self.status_message = format!("Activation failed: {e}");
+                            }
+                            Pane::Groups => {
+                                self.group_status_message = format!("Activation failed: {e}");
+                            }
+                        }
                     }
                 }
                 self.update_filtered_indices();
             }
             BgEvent::DeactivationResult { index, result } => {
+                let roles = self.active_roles_mut();
                 match result {
                     Ok(()) => {
-                        if let Some(role) = self.roles.get_mut(index) {
+                        if let Some(role) = roles.get_mut(index) {
                             role.status = RoleStatus::Eligible;
                             role.selected = false;
                         }
-                        self.status_message = "Deactivated - refreshing...".to_string();
-                        self.spawn_fetch_roles();
+                        match self.active_pane {
+                            Pane::Resources => {
+                                self.status_message = "Deactivated - refreshing...".to_string();
+                            }
+                            Pane::Groups => {
+                                self.group_status_message =
+                                    "Deactivated - refreshing...".to_string();
+                            }
+                        }
                     }
                     Err(e) => {
-                        self.status_message = format!("Deactivation failed: {e}");
+                        match self.active_pane {
+                            Pane::Resources => {
+                                self.status_message = format!("Deactivation failed: {e}");
+                            }
+                            Pane::Groups => {
+                                self.group_status_message =
+                                    format!("Deactivation failed: {e}");
+                            }
+                        }
                     }
                 }
                 self.update_filtered_indices();
             }
+            BgEvent::GraphStatus(msg) => {
+                self.group_status_message = msg;
+            }
         }
-    }
-
-    pub fn spawn_fetch_roles(&self) {
-        // The actual spawning happens in main.rs using the client
-        // This is a signal method - main loop checks this
     }
 }

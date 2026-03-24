@@ -181,6 +181,8 @@ impl PimClient {
                     scope: e.properties.scope.clone(),
                     role_name,
                     scope_display_name: scope_display,
+                    role_type: RoleType::Resource,
+                    group_id: None,
                     status: RoleStatus::Eligible,
                     selected: false,
                 }

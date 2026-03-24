@@ -101,6 +101,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
+        // Switch pane
+        KeyCode::Tab => {
+            app.switch_pane();
+            EventAction::PaneSwitch
+        }
+
         // View cycle
         KeyCode::Char('v') => {
             app.view_filter = app.view_filter.cycle();
@@ -147,4 +153,5 @@ fn handle_filter_key(app: &mut App, key: KeyEvent) -> EventAction {
 pub enum EventAction {
     None,
     Refresh,
+    PaneSwitch,
 }

@@ -6,6 +6,7 @@ mod event_modal;
 mod ui;
 
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -16,15 +17,17 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use app::{ActiveModal, App, AuthData, BgEvent};
+use app::{ActiveModal, App, AuthData, BgEvent, Pane};
 use client::auth;
+use client::graph_credential::GraphCredential;
+use client::group::GroupPimClient;
+use client::models::RoleType;
 use client::pim::PimClient;
 use event::EventAction;
 use event_modal::ModalAction;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging to stderr (so it doesn't interfere with TUI)
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -42,8 +45,24 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         match auth::get_auth_info().await {
             Ok(info) => {
+                // Create a channel for GraphCredential to send status messages
+                // (device code prompts) back to the TUI
+                let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
+                let bg_tx = tx.clone();
+                tokio::spawn(async move {
+                    while let Some(msg) = status_rx.recv().await {
+                        let _ = bg_tx.send(BgEvent::GraphStatus(msg));
+                    }
+                });
+
+                let graph_credential = Arc::new(GraphCredential::new(
+                    info.tenant_id,
+                    Some(status_tx),
+                ));
+
                 let _ = tx.send(BgEvent::AuthReady(Ok(AuthData {
                     credential: info.credential,
+                    graph_credential,
                     principal_id: info.principal_id,
                     user_display: info.user_display,
                     subscriptions: info.subscriptions,
@@ -98,15 +117,20 @@ async fn run_app(
             }
         }
 
-        // Trigger fetch if needed
+        // Trigger resource fetch if needed
         if needs_fetch {
-            spawn_fetch(app);
+            spawn_fetch_resources(app);
             needs_fetch = false;
         }
 
-        // Auto-refresh timer
+        // Trigger group fetch on first visit to Groups pane
+        if app.needs_group_fetch() && app.auth.is_some() {
+            spawn_fetch_groups(app);
+        }
+
+        // Auto-refresh timer (only for resource roles in resource pane)
         if last_refresh.elapsed() >= auto_refresh && app.auth.is_some() && !app.loading {
-            spawn_fetch(app);
+            spawn_fetch_resources(app);
             last_refresh = Instant::now();
         }
 
@@ -125,8 +149,19 @@ async fn run_app(
                 } else {
                     match event::handle_key(app, key) {
                         EventAction::Refresh => {
-                            spawn_fetch(app);
+                            match app.active_pane {
+                                Pane::Resources => {
+                                    spawn_fetch_resources(app);
+                                }
+                                Pane::Groups => {
+                                    app.groups_loaded = false;
+                                    spawn_fetch_groups(app);
+                                }
+                            }
                             last_refresh = Instant::now();
+                        }
+                        EventAction::PaneSwitch => {
+                            // Group fetch triggered above via needs_group_fetch()
                         }
                         EventAction::None => {}
                     }
@@ -144,7 +179,7 @@ async fn run_app(
     }
 }
 
-fn spawn_fetch(app: &App) {
+fn spawn_fetch_resources(app: &App) {
     let auth = match &app.auth {
         Some(a) => a.clone(),
         None => return,
@@ -157,14 +192,28 @@ fn spawn_fetch(app: &App) {
             auth.principal_id.clone(),
             auth.subscriptions.clone(),
         );
-        match client.fetch_roles().await {
-            Ok(roles) => {
-                let _ = tx.send(BgEvent::RolesLoaded(Ok(roles)));
-            }
-            Err(e) => {
-                let _ = tx.send(BgEvent::RolesLoaded(Err(e.to_string())));
-            }
-        }
+        let result = client.fetch_roles().await;
+        let _ = tx.send(BgEvent::RolesLoaded(result.map_err(|e| e.to_string())));
+    });
+}
+
+fn spawn_fetch_groups(app: &mut App) {
+    let auth = match &app.auth {
+        Some(a) => a.clone(),
+        None => return,
+    };
+
+    app.groups_loading = true;
+    app.group_status_message = "Authenticating with Graph API...".to_string();
+
+    let tx = app.bg_tx.clone();
+    tokio::spawn(async move {
+        let client = GroupPimClient::new(
+            auth.graph_credential.clone(),
+            auth.principal_id.clone(),
+        );
+        let result = client.fetch_group_roles().await;
+        let _ = tx.send(BgEvent::GroupRolesLoaded(result.map_err(|e| e.to_string())));
     });
 }
 
@@ -174,6 +223,8 @@ fn handle_modal_action(app: &mut App, action: ModalAction) {
         None => return,
     };
 
+    let pane = app.active_pane;
+
     match action {
         ModalAction::Activate {
             indices,
@@ -182,58 +233,67 @@ fn handle_modal_action(app: &mut App, action: ModalAction) {
         } => {
             for idx in indices {
                 let tx = app.bg_tx.clone();
-                let role = app.roles[idx].clone();
+                let role = app.active_roles()[idx].clone();
                 let just = justification.clone();
                 let auth = auth.clone();
 
                 tokio::spawn(async move {
-                    let client = PimClient::new(
-                        auth.credential.clone(),
-                        auth.principal_id.clone(),
-                        auth.subscriptions.clone(),
-                    );
-                    match client.activate_role(&role, &just, duration_hours).await {
-                        Ok(()) => {
-                            let _ = tx.send(BgEvent::ActivationResult {
-                                index: idx,
-                                result: Ok(()),
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(BgEvent::ActivationResult {
-                                index: idx,
-                                result: Err(e.to_string()),
-                            });
-                        }
-                    }
+                    let result = if role.role_type == RoleType::Resource {
+                        let client = PimClient::new(
+                            auth.credential.clone(),
+                            auth.principal_id.clone(),
+                            auth.subscriptions.clone(),
+                        );
+                        client.activate_role(&role, &just, duration_hours).await
+                    } else {
+                        let client = GroupPimClient::new(
+                            auth.graph_credential.clone(),
+                            auth.principal_id.clone(),
+                        );
+                        client.activate_group(&role, &just, duration_hours).await
+                    };
+
+                    let _ = tx.send(BgEvent::ActivationResult {
+                        index: idx,
+                        result: result.map_err(|e| e.to_string()),
+                    });
                 });
             }
         }
         ModalAction::Deactivate { index } => {
             let tx = app.bg_tx.clone();
-            let role = app.roles[index].clone();
+            let role = app.active_roles()[index].clone();
 
             tokio::spawn(async move {
-                let client = PimClient::new(
-                    auth.credential.clone(),
-                    auth.principal_id.clone(),
-                    auth.subscriptions.clone(),
-                );
-                match client.deactivate_role(&role).await {
-                    Ok(()) => {
-                        let _ = tx.send(BgEvent::DeactivationResult {
-                            index,
-                            result: Ok(()),
-                        });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(BgEvent::DeactivationResult {
-                            index,
-                            result: Err(e.to_string()),
-                        });
-                    }
-                }
+                let result = if role.role_type == RoleType::Resource {
+                    let client = PimClient::new(
+                        auth.credential.clone(),
+                        auth.principal_id.clone(),
+                        auth.subscriptions.clone(),
+                    );
+                    client.deactivate_role(&role).await
+                } else {
+                    let client = GroupPimClient::new(
+                        auth.graph_credential.clone(),
+                        auth.principal_id.clone(),
+                    );
+                    client.deactivate_group(&role).await
+                };
+
+                let _ = tx.send(BgEvent::DeactivationResult {
+                    index,
+                    result: result.map_err(|e| e.to_string()),
+                });
             });
+        }
+    }
+
+    // Trigger refresh after activation/deactivation
+    match pane {
+        Pane::Resources => spawn_fetch_resources(app),
+        Pane::Groups => {
+            app.groups_loaded = false;
+            spawn_fetch_groups(app);
         }
     }
 }

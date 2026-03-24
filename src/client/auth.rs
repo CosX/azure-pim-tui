@@ -13,6 +13,7 @@ const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 #[derive(Debug, Deserialize)]
 struct JwtClaims {
     oid: Option<String>,
+    tid: Option<String>,
     unique_name: Option<String>,
     upn: Option<String>,
 }
@@ -20,6 +21,7 @@ struct JwtClaims {
 pub struct AuthInfo {
     pub credential: Arc<dyn TokenCredential>,
     pub principal_id: String,
+    pub tenant_id: String,
     pub user_display: String,
     pub subscriptions: Vec<SubscriptionInfo>,
 }
@@ -63,6 +65,9 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
     let principal_id = claims
         .oid
         .ok_or_else(|| PimError::Parse("No 'oid' claim in token".to_string()))?;
+    let tenant_id = claims
+        .tid
+        .ok_or_else(|| PimError::Parse("No 'tid' claim in token".to_string()))?;
     let user_display = claims
         .upn
         .or(claims.unique_name)
@@ -76,6 +81,7 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
     Ok(AuthInfo {
         credential,
         principal_id,
+        tenant_id,
         user_display,
         subscriptions,
     })
