@@ -274,10 +274,14 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    pub fn toggle_selected(&mut self) {
+    /// Toggles selection on the current role and returns `true` if the role is now selected.
+    pub fn toggle_selected(&mut self) -> bool {
         if let Some(&i) = self.filtered_indices.get(self.selected) {
-            self.active_roles_mut()[i].selected = !self.active_roles_mut()[i].selected;
+            let new_val = !self.active_roles_mut()[i].selected;
+            self.active_roles_mut()[i].selected = new_val;
+            return new_val;
         }
+        false
     }
 
     pub fn selected_indices(&self) -> Vec<usize> {

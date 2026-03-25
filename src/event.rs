@@ -81,10 +81,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Toggle selection
+        // Toggle selection — advance cursor only when selecting, not deselecting
         KeyCode::Char(' ') => {
-            app.toggle_selected();
-            app.move_selection(1);
+            if app.toggle_selected() {
+                app.move_selection(1);
+            }
             EventAction::None
         }
 
