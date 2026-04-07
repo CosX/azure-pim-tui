@@ -188,12 +188,13 @@ async fn run_app(
     }
 }
 
-fn spawn_fetch_resources(app: &App) {
+fn spawn_fetch_resources(app: &mut App) {
     let auth = match &app.auth {
         Some(a) => a.clone(),
         None => return,
     };
 
+    app.loading = true;
     let tx = app.bg_tx.clone();
     tokio::spawn(async move {
         let client = PimClient::new(
