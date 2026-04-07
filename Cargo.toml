@@ -1,6 +1,6 @@
 [package]
 name = "azure-pim-tui"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 authors = ["Karl Solgård <karl@solgard.solutions>"]
 description = "A terminal UI for managing Azure PIM role activations"
