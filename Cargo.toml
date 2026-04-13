@@ -41,7 +41,7 @@ serde_json = "1"
 toml = "1.1"
 
 # Azure AD authentication
-azure_identity = "0.33"
+azure_identity = "0.34"
 azure_core = "0.33"
 
 # Time
