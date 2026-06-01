@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             duration,
             focused_field,
         } => {
-            let role = &app.roles[*role_index];
+            let role = &app.active_roles()[*role_index];
             render_activate_modal(
                 f,
                 area,
@@ -48,7 +48,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             );
         }
         ActiveModal::DeactivateConfirm { role_index } => {
-            let role = &app.roles[*role_index];
+            let role = &app.active_roles()[*role_index];
             render_deactivate_modal(f, area, &role.role_name, &role.scope_display_name);
         }
         ActiveModal::Help => {
