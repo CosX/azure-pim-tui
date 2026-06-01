@@ -98,6 +98,7 @@ name = "azure-pim-tui"
 version = "0.0.3"
 dependencies = [
  "anyhow",
+ "async-trait",
  "azure_core",
  "azure_identity",
  "base64",
@@ -111,6 +112,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "toml",
  "tracing",

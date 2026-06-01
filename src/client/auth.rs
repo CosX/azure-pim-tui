@@ -6,6 +6,7 @@ use azure_identity::DeveloperToolsCredential;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use serde::Deserialize;
 
+use super::cached_credential::CachedTokenCredential;
 use super::error::PimError;
 
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
@@ -49,8 +50,10 @@ struct SubscriptionListResponse {
 }
 
 pub async fn get_auth_info() -> Result<AuthInfo> {
-    let credential: Arc<dyn TokenCredential> =
+    let raw: Arc<dyn TokenCredential> =
         DeveloperToolsCredential::new(None).context("Failed to create Azure credential")?;
+    // Wrap with a token cache so we don't spawn `az`/Python on every HTTP call.
+    let credential: Arc<dyn TokenCredential> = Arc::new(CachedTokenCredential::new(raw));
 
     // Get a token to extract principal ID and user info from JWT claims
     let token_response = credential

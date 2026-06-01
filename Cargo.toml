@@ -60,6 +60,8 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 base64 = "0.22"
 futures = "0.3"
+async-trait = "0.1"
+time = "0.3"
 
 [profile.release]
 lto = true
