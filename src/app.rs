@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use azure_core::credentials::TokenCredential;
@@ -307,6 +307,44 @@ impl App {
             .count()
     }
 
+    /// Owned copy of the highlighted role's identity, for restoring the cursor
+    /// after the role list is replaced by a refresh.
+    fn selected_identity(&self) -> Option<(String, String, String)> {
+        self.selected_role().map(|r| {
+            let (rd, scope, group) = r.identity();
+            (rd.to_string(), scope.to_string(), group.to_string())
+        })
+    }
+
+    /// Re-applies the multi-select marks from `old` onto freshly fetched roles.
+    fn carry_over_marks(old: &[PimRole], new: &mut [PimRole]) {
+        let marked: HashSet<(&str, &str, &str)> = old
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.identity())
+            .collect();
+        for role in new.iter_mut() {
+            role.selected = marked.contains(&role.identity());
+        }
+    }
+
+    /// Rebuilds the filtered view and puts the cursor back on `ident` if it is
+    /// still visible, so a refresh does not jump the highlight to another role.
+    fn refilter_keeping_cursor(&mut self, ident: Option<(String, String, String)>) {
+        self.update_filtered_indices();
+        let Some((rd, scope, group)) = ident else {
+            return;
+        };
+        let pos = self.filtered_indices.iter().position(|&i| {
+            self.active_roles()
+                .get(i)
+                .is_some_and(|r| r.identity() == (rd.as_str(), scope.as_str(), group.as_str()))
+        });
+        if let Some(pos) = pos {
+            self.selected = pos;
+        }
+    }
+
     pub fn handle_bg_event(&mut self, event: BgEvent) {
         match event {
             BgEvent::AuthReady(Ok(auth_data)) => {
@@ -318,10 +356,14 @@ impl App {
                 self.loading = false;
                 self.status_message = format!("Auth failed: {e}");
             }
-            BgEvent::RolesLoaded(Ok(roles)) => {
+            BgEvent::RolesLoaded(Ok(mut roles)) => {
+                Self::carry_over_marks(&self.roles, &mut roles);
+                let ident = (self.active_pane == Pane::Resources)
+                    .then(|| self.selected_identity())
+                    .flatten();
                 self.roles = roles;
                 if self.active_pane == Pane::Resources {
-                    self.update_filtered_indices();
+                    self.refilter_keeping_cursor(ident);
                 }
                 self.loading = false;
                 self.last_refresh = Some(Utc::now());
@@ -331,13 +373,17 @@ impl App {
                 self.loading = false;
                 self.status_message = format!("Failed to load roles: {e}");
             }
-            BgEvent::GroupRolesLoaded(Ok(roles)) => {
+            BgEvent::GroupRolesLoaded(Ok(mut roles)) => {
+                Self::carry_over_marks(&self.group_roles, &mut roles);
+                let ident = (self.active_pane == Pane::Groups)
+                    .then(|| self.selected_identity())
+                    .flatten();
                 self.group_roles = roles;
                 self.groups_loaded = true;
                 self.groups_loading = false;
                 self.group_status_message = "Ready".to_string();
                 if self.active_pane == Pane::Groups {
-                    self.update_filtered_indices();
+                    self.refilter_keeping_cursor(ident);
                 }
             }
             BgEvent::GroupRolesLoaded(Err(e)) => {

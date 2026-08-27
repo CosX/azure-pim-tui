@@ -230,6 +230,18 @@ pub struct PimRole {
     pub selected: bool,
 }
 
+impl PimRole {
+    /// Identity that survives a refresh. `eligibility_id` cannot be used: activating a
+    /// role swaps the eligibility schedule for an assignment schedule with a new id.
+    pub fn identity(&self) -> (&str, &str, &str) {
+        (
+            &self.role_definition_id,
+            &self.scope,
+            self.group_id.as_deref().unwrap_or(""),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RoleStatus {
     Eligible,
