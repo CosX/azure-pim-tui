@@ -52,6 +52,10 @@ fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled(
+            concat!(" v", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::raw("  ·  "),
         Span::styled(&app.user_display, Style::default().fg(Color::White)),
     ]))
