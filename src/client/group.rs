@@ -10,6 +10,7 @@ use super::graph_credential::GraphCredential;
 use super::models::*;
 
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
+const MAX_PAGES: usize = 100;
 
 pub struct GroupPimClient {
     client: Client,
@@ -30,29 +31,27 @@ impl GroupPimClient {
         self.credential.get_token().await
     }
 
-    pub async fn fetch_group_roles(&self) -> Result<Vec<PimRole>> {
+    pub async fn fetch_group_roles(&self) -> Result<RoleFetch> {
         let (eligible, active) = tokio::join!(self.list_eligible(), self.list_active());
 
-        let eligible = match eligible {
-            Ok(e) => {
-                debug!("Found {} eligible group roles", e.len());
-                e
-            }
-            Err(e) => {
-                warn!("Failed to fetch eligible group roles: {e}");
-                return Ok(vec![]);
-            }
-        };
+        // An eligibility failure means the whole list is unknown — propagate so the caller
+        // keeps what it already has rather than rendering an empty pane.
+        let eligible = eligible?;
+        debug!("Found {} eligible group roles", eligible.len());
+
+        // Group roles share one scope prefix, so an empty string marks "all of them".
+        let mut stale_status_scopes = Vec::new();
         let active = match active {
             Ok(a) => a,
             Err(e) => {
                 warn!("Failed to fetch active group roles: {e}");
+                stale_status_scopes.push(String::new());
                 vec![]
             }
         };
 
         if eligible.is_empty() {
-            return Ok(vec![]);
+            return Ok(RoleFetch::complete(vec![]));
         }
 
         // Collect unique group IDs to resolve display names
@@ -112,73 +111,70 @@ impl GroupPimClient {
             }
         }
 
-        roles.sort_by(|a, b| {
-            a.role_name
-                .cmp(&b.role_name)
-                .then_with(|| a.scope_display_name.cmp(&b.scope_display_name))
-        });
+        sort_group_roles(&mut roles);
 
-        Ok(roles)
+        Ok(RoleFetch {
+            roles,
+            missing_scopes: Vec::new(),
+            stale_status_scopes,
+        })
+    }
+
+    /// GETs a paged Graph list endpoint, following `@odata.nextLink` until exhausted.
+    ///
+    /// 400/403/404 mean the tenant does not offer PIM for Groups (or the user cannot read
+    /// it) and yield an empty list. Anything else — throttling especially — is an error,
+    /// so a transient failure does not read as "the user has no group roles".
+    async fn list_paged<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<Vec<T>> {
+        let token = self.get_token().await?;
+        let filter = format!("principalId eq '{}'", self.principal_id);
+        let mut out = Vec::new();
+        let mut next: Option<String> = None;
+
+        // Bounded so a server echoing the same nextLink cannot hang the refresh.
+        for _ in 0..MAX_PAGES {
+            let req = match &next {
+                Some(link) => self.client.get(link),
+                None => self.client.get(url).query(&[("$filter", &filter)]),
+            };
+
+            let resp = req.bearer_auth(&token).send().await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let message = resp.text().await.unwrap_or_default();
+                warn!("Graph {url} returned {status}: {message}");
+                if status == 400 || status == 403 || status == 404 {
+                    return Ok(out);
+                }
+                return Err(PimError::Api { status, message }.into());
+            }
+
+            let text = resp.text().await?;
+            let body: GraphListResponse<T> = serde_json::from_str(&text)?;
+            out.extend(body.value);
+
+            match body.next_link {
+                Some(link) => next = Some(link),
+                None => return Ok(out),
+            }
+        }
+
+        Ok(out)
     }
 
     async fn list_eligible(&self) -> Result<Vec<GroupEligibilityScheduleInstance>> {
-        let token = self.get_token().await?;
-        let url = format!(
+        self.list_paged(&format!(
             "{GRAPH_BASE}/identityGovernance/privilegedAccess/group/eligibilityScheduleInstances"
-        );
-        let filter = format!("principalId eq '{}'", self.principal_id);
-
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("$filter", &filter)])
-            .bearer_auth(&token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            warn!("Group eligibility API returned {status}: {body}");
-            // Return empty if the tenant doesn't support PIM for Groups
-            if status == 400 || status == 403 || status == 404 {
-                return Ok(vec![]);
-            }
-            return Err(PimError::Api {
-                status,
-                message: body,
-            }
-            .into());
-        }
-
-        let text = resp.text().await?;
-        debug!("Group eligibility response: {text}");
-        let body: GraphListResponse<GroupEligibilityScheduleInstance> =
-            serde_json::from_str(&text)?;
-        Ok(body.value)
+        ))
+        .await
     }
 
     async fn list_active(&self) -> Result<Vec<GroupAssignmentScheduleInstance>> {
-        let token = self.get_token().await?;
-        let url = format!(
+        self.list_paged(&format!(
             "{GRAPH_BASE}/identityGovernance/privilegedAccess/group/assignmentScheduleInstances"
-        );
-        let filter = format!("principalId eq '{}'", self.principal_id);
-
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("$filter", &filter)])
-            .bearer_auth(&token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Ok(vec![]);
-        }
-
-        let body: GraphListResponse<GroupAssignmentScheduleInstance> = resp.json().await?;
-        Ok(body.value)
+        ))
+        .await
     }
 
     async fn resolve_group_names(&self, group_ids: &[String]) -> Result<HashMap<String, String>> {

@@ -7,7 +7,9 @@ use tokio::sync::mpsc;
 
 use crate::client::auth::SubscriptionInfo;
 use crate::client::graph_credential::GraphCredential;
-use crate::client::models::{PimRole, RoleStatus};
+use crate::client::models::{
+    sort_group_roles, sort_resource_roles, PimRole, RoleFetch, RoleStatus,
+};
 use crate::config::Config;
 
 pub struct AuthData {
@@ -19,8 +21,8 @@ pub struct AuthData {
 }
 
 pub enum BgEvent {
-    RolesLoaded(Result<Vec<PimRole>, String>),
-    GroupRolesLoaded(Result<Vec<PimRole>, String>),
+    RolesLoaded(Result<RoleFetch, String>),
+    GroupRolesLoaded(Result<RoleFetch, String>),
     ActivationResult {
         index: usize,
         result: Result<(), String>,
@@ -316,15 +318,59 @@ impl App {
         })
     }
 
-    /// Re-applies the multi-select marks from `old` onto freshly fetched roles.
-    fn carry_over_marks(old: &[PimRole], new: &mut [PimRole]) {
+    /// Folds a fetch result into the previous list.
+    ///
+    /// A refresh is not authoritative about scopes it failed to query, so roles under a
+    /// missing scope are carried over rather than dropped, and roles whose active-status
+    /// query failed keep the status they already had. Multi-select marks survive too.
+    fn merge_fetch(old: &[PimRole], fetch: RoleFetch, pane: Pane) -> Vec<PimRole> {
+        let under = |role: &PimRole, scopes: &[String]| {
+            scopes.iter().any(|prefix| role.scope.starts_with(prefix))
+        };
+
+        let mut roles = fetch.roles;
+
         let marked: HashSet<(&str, &str, &str)> = old
             .iter()
             .filter(|r| r.selected)
             .map(|r| r.identity())
             .collect();
-        for role in new.iter_mut() {
+        let previous: HashMap<(&str, &str, &str), &PimRole> =
+            old.iter().map(|r| (r.identity(), r)).collect();
+
+        for role in roles.iter_mut() {
             role.selected = marked.contains(&role.identity());
+            if under(role, &fetch.stale_status_scopes) {
+                if let Some(prev) = previous.get(&role.identity()) {
+                    role.status = prev.status.clone();
+                }
+            }
+        }
+
+        let carried: Vec<PimRole> = {
+            let fetched: HashSet<(&str, &str, &str)> = roles.iter().map(|r| r.identity()).collect();
+            old.iter()
+                .filter(|r| under(r, &fetch.missing_scopes) && !fetched.contains(&r.identity()))
+                .cloned()
+                .collect()
+        };
+        roles.extend(carried);
+
+        match pane {
+            Pane::Resources => sort_resource_roles(&mut roles),
+            Pane::Groups => sort_group_roles(&mut roles),
+        }
+        roles
+    }
+
+    /// Status line for a fetch that only partly succeeded.
+    fn partial_status(fetch: &RoleFetch) -> String {
+        let missing = fetch.missing_scopes.len();
+        let stale = fetch.stale_status_scopes.len();
+        if missing > 0 {
+            format!("Ready - {missing} scope(s) unavailable, showing last known roles")
+        } else {
+            format!("Ready - {stale} scope(s) unavailable, active status may be stale")
         }
     }
 
@@ -356,32 +402,38 @@ impl App {
                 self.loading = false;
                 self.status_message = format!("Auth failed: {e}");
             }
-            BgEvent::RolesLoaded(Ok(mut roles)) => {
-                Self::carry_over_marks(&self.roles, &mut roles);
+            BgEvent::RolesLoaded(Ok(fetch)) => {
                 let ident = (self.active_pane == Pane::Resources)
                     .then(|| self.selected_identity())
                     .flatten();
-                self.roles = roles;
+                self.status_message = if fetch.is_partial() {
+                    Self::partial_status(&fetch)
+                } else {
+                    "Ready".to_string()
+                };
+                self.roles = Self::merge_fetch(&self.roles, fetch, Pane::Resources);
                 if self.active_pane == Pane::Resources {
                     self.refilter_keeping_cursor(ident);
                 }
                 self.loading = false;
                 self.last_refresh = Some(Utc::now());
-                self.status_message = "Ready".to_string();
             }
             BgEvent::RolesLoaded(Err(e)) => {
                 self.loading = false;
                 self.status_message = format!("Failed to load roles: {e}");
             }
-            BgEvent::GroupRolesLoaded(Ok(mut roles)) => {
-                Self::carry_over_marks(&self.group_roles, &mut roles);
+            BgEvent::GroupRolesLoaded(Ok(fetch)) => {
                 let ident = (self.active_pane == Pane::Groups)
                     .then(|| self.selected_identity())
                     .flatten();
-                self.group_roles = roles;
+                self.group_status_message = if fetch.is_partial() {
+                    Self::partial_status(&fetch)
+                } else {
+                    "Ready".to_string()
+                };
+                self.group_roles = Self::merge_fetch(&self.group_roles, fetch, Pane::Groups);
                 self.groups_loaded = true;
                 self.groups_loading = false;
-                self.group_status_message = "Ready".to_string();
                 if self.active_pane == Pane::Groups {
                     self.refilter_keeping_cursor(ident);
                 }

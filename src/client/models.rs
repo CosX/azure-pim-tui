@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 // --- API Response wrappers ---
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiListResponse<T> {
     pub value: Vec<T>,
+    pub next_link: Option<String>,
 }
 
 // --- Role Eligibility (what roles the user CAN activate) ---
@@ -130,6 +132,8 @@ pub struct ExpirationInfo {
 #[serde(rename_all = "camelCase")]
 pub struct GraphListResponse<T> {
     pub value: Vec<T>,
+    #[serde(rename = "@odata.nextLink")]
+    pub next_link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +232,56 @@ pub struct PimRole {
     pub group_id: Option<String>,
     pub status: RoleStatus,
     pub selected: bool,
+}
+
+/// Display order for resource roles: scope, then role name, active first.
+pub fn sort_resource_roles(roles: &mut [PimRole]) {
+    roles.sort_by(|a, b| {
+        a.scope_display_name
+            .cmp(&b.scope_display_name)
+            .then_with(|| a.role_name.cmp(&b.role_name))
+            .then_with(|| {
+                let a_active = a.status.is_active() as u8;
+                let b_active = b.status.is_active() as u8;
+                b_active.cmp(&a_active)
+            })
+    });
+}
+
+/// Display order for group roles: group name, then member/owner.
+pub fn sort_group_roles(roles: &mut [PimRole]) {
+    roles.sort_by(|a, b| {
+        a.role_name
+            .cmp(&b.role_name)
+            .then_with(|| a.scope_display_name.cmp(&b.scope_display_name))
+    });
+}
+
+/// Outcome of a role fetch. A fetch can succeed partially: some scopes answer while
+/// others throttle or fail, and the caller must not treat the gap as "role removed".
+#[derive(Debug, Default)]
+pub struct RoleFetch {
+    pub roles: Vec<PimRole>,
+    /// Scope prefixes whose eligibility query failed — their roles are absent from
+    /// `roles` entirely and the previous list should be kept for them.
+    pub missing_scopes: Vec<String>,
+    /// Scope prefixes whose active-assignment query failed — their roles are present
+    /// but every one is reported `Eligible`, so the previous status should be kept.
+    pub stale_status_scopes: Vec<String>,
+}
+
+impl RoleFetch {
+    pub fn complete(roles: Vec<PimRole>) -> Self {
+        Self {
+            roles,
+            missing_scopes: Vec::new(),
+            stale_status_scopes: Vec::new(),
+        }
+    }
+
+    pub fn is_partial(&self) -> bool {
+        !self.missing_scopes.is_empty() || !self.stale_status_scopes.is_empty()
+    }
 }
 
 impl PimRole {

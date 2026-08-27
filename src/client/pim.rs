@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use azure_core::credentials::TokenCredential;
 use reqwest::Client;
+use tracing::warn;
 use uuid::Uuid;
 
 use super::auth::SubscriptionInfo;
@@ -13,6 +14,7 @@ use super::models::*;
 const API_VERSION: &str = "2020-10-01";
 const BASE_URL: &str = "https://management.azure.com";
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
+const MAX_PAGES: usize = 100;
 
 pub struct PimClient {
     client: Client,
@@ -44,34 +46,64 @@ impl PimClient {
         Ok(token_response.token.secret().to_string())
     }
 
+    /// GETs a paged ARM list endpoint, following `nextLink` until exhausted.
+    ///
+    /// 403/404 mean the signed-in user cannot read PIM at this scope, which is a normal
+    /// outcome and yields an empty list. Every other non-2xx (notably 429 throttling and
+    /// 5xx) is an error: reporting it as "no roles here" is what makes roles vanish on a
+    /// refresh.
+    async fn list_paged<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        filter: &str,
+    ) -> Result<Vec<T>> {
+        let token = self.get_token().await?;
+        let mut out = Vec::new();
+        let mut next: Option<String> = None;
+
+        // Bounded so a server echoing the same nextLink cannot hang the refresh.
+        for _ in 0..MAX_PAGES {
+            let req = match &next {
+                Some(link) => self.client.get(link),
+                None => self
+                    .client
+                    .get(url)
+                    .query(&[("$filter", filter), ("api-version", API_VERSION)]),
+            };
+
+            let resp = req.bearer_auth(&token).send().await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                if status == 403 || status == 404 {
+                    return Ok(out);
+                }
+                let message = resp.text().await.unwrap_or_default();
+                return Err(PimError::Api { status, message }.into());
+            }
+
+            let text = resp.text().await?;
+            let body: ApiListResponse<T> = serde_json::from_str(&text)?;
+            out.extend(body.value);
+
+            match body.next_link {
+                Some(link) => next = Some(link),
+                None => return Ok(out),
+            }
+        }
+
+        Ok(out)
+    }
+
     /// List eligible role schedules at a specific scope, filtered to this principal.
     async fn list_eligible_at_scope(
         &self,
         scope: &str,
     ) -> Result<Vec<RoleEligibilityScheduleInstance>> {
         let filter = format!("assignedTo('{}') and atScope()", self.principal_id);
-        let base =
+        let url =
             format!("{BASE_URL}{scope}/providers/Microsoft.Authorization/roleEligibilitySchedules");
-        let token = self.get_token().await?;
-
-        let resp = self
-            .client
-            .get(&base)
-            .query(&[
-                ("$filter", &filter),
-                ("api-version", &API_VERSION.to_string()),
-            ])
-            .bearer_auth(&token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Ok(vec![]);
-        }
-
-        let text = resp.text().await?;
-        let body: ApiListResponse<RoleEligibilityScheduleInstance> = serde_json::from_str(&text)?;
-        Ok(body.value)
+        self.list_paged(&url, &filter).await
     }
 
     /// List active assignment schedule instances at a specific scope, filtered to this principal.
@@ -80,32 +112,13 @@ impl PimClient {
         scope: &str,
     ) -> Result<Vec<RoleAssignmentScheduleInstance>> {
         let filter = format!("assignedTo('{}') and atScope()", self.principal_id);
-        let base = format!(
+        let url = format!(
             "{BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances"
         );
-        let token = self.get_token().await?;
-
-        let resp = self
-            .client
-            .get(&base)
-            .query(&[
-                ("$filter", &filter),
-                ("api-version", &API_VERSION.to_string()),
-            ])
-            .bearer_auth(&token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Ok(vec![]);
-        }
-
-        let text = resp.text().await?;
-        let body: ApiListResponse<RoleAssignmentScheduleInstance> = serde_json::from_str(&text)?;
-        Ok(body.value)
+        self.list_paged(&url, &filter).await
     }
 
-    pub async fn fetch_roles(&self) -> Result<Vec<PimRole>> {
+    pub async fn fetch_roles(&self) -> Result<RoleFetch> {
         // Build scope list from subscriptions
         let scopes: Vec<String> = self
             .subscriptions
@@ -120,30 +133,43 @@ impl PimClient {
             .into());
         }
 
-        // Query eligibility + active assignments for all scopes in parallel
-        let mut eligible_futures = Vec::new();
-        let mut active_futures = Vec::new();
-        for scope in &scopes {
-            eligible_futures.push(self.list_eligible_at_scope(scope));
-            active_futures.push(self.list_active_at_scope(scope));
-        }
+        // Query eligibility + active assignments for all scopes in parallel, keeping each
+        // result paired with its scope so a failure can be reported instead of swallowed.
+        let eligible_futures = scopes
+            .iter()
+            .map(|scope| async move { (scope, self.list_eligible_at_scope(scope).await) });
+        let active_futures = scopes
+            .iter()
+            .map(|scope| async move { (scope, self.list_active_at_scope(scope).await) });
 
         let (eligible_results, active_results) = tokio::join!(
             futures::future::join_all(eligible_futures),
             futures::future::join_all(active_futures),
         );
 
-        let eligible: Vec<RoleEligibilityScheduleInstance> = eligible_results
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .flatten()
-            .collect();
+        let mut missing_scopes = Vec::new();
+        let mut eligible: Vec<RoleEligibilityScheduleInstance> = Vec::new();
+        for (scope, result) in eligible_results {
+            match result {
+                Ok(items) => eligible.extend(items),
+                Err(e) => {
+                    warn!("Eligibility query failed for {scope}: {e}");
+                    missing_scopes.push(scope.clone());
+                }
+            }
+        }
 
-        let active: Vec<RoleAssignmentScheduleInstance> = active_results
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .flatten()
-            .collect();
+        let mut stale_status_scopes = Vec::new();
+        let mut active: Vec<RoleAssignmentScheduleInstance> = Vec::new();
+        for (scope, result) in active_results {
+            match result {
+                Ok(items) => active.extend(items),
+                Err(e) => {
+                    warn!("Active-assignment query failed for {scope}: {e}");
+                    stale_status_scopes.push(scope.clone());
+                }
+            }
+        }
 
         // Build subscription name lookup
         let sub_names: std::collections::HashMap<&str, &str> = self
@@ -214,19 +240,13 @@ impl PimClient {
             }
         }
 
-        // Sort: by scope, then role name, then active first
-        roles.sort_by(|a, b| {
-            a.scope_display_name
-                .cmp(&b.scope_display_name)
-                .then_with(|| a.role_name.cmp(&b.role_name))
-                .then_with(|| {
-                    let a_active = a.status.is_active() as u8;
-                    let b_active = b.status.is_active() as u8;
-                    b_active.cmp(&a_active)
-                })
-        });
+        sort_resource_roles(&mut roles);
 
-        Ok(roles)
+        Ok(RoleFetch {
+            roles,
+            missing_scopes,
+            stale_status_scopes,
+        })
     }
 
     pub async fn activate_role(
