@@ -42,7 +42,7 @@ toml = "1.1"
 
 # Azure AD authentication
 azure_identity = "0.34"
-azure_core = "0.34"
+azure_core = "1.1"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
