@@ -58,7 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Misc
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
-base64 = "0.22"
+base64 = "0.23"
 futures = "0.3"
 async-trait = "0.1"
 time = "0.3"
