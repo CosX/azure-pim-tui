@@ -1,6 +1,6 @@
 [package]
 name = "azure-pim-tui"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 authors = ["Karl Solgård <karl@solgard.solutions>"]
 description = "A terminal UI for managing Azure PIM role activations"
@@ -11,12 +11,7 @@ homepage = "https://github.com/CosX/azure-pim-tui"
 documentation = "https://github.com/CosX/azure-pim-tui"
 keywords = ["azure", "pim", "tui", "terminal", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [
-    "target/",
-    ".github/",
-    ".git/",
-    "*.sh",
-]
+exclude = ["target/", ".github/", ".git/", "*.sh"]
 
 [features]
 vendored-tls = ["dep:openssl-sys"]
@@ -33,7 +28,10 @@ crossterm = "0.29"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+reqwest = { version = "0.12", features = [
+  "rustls-tls",
+  "json",
+], default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
