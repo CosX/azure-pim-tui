@@ -11,11 +11,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
-    event::{Event, KeyEventKind},
+    event::{DisableFocusChange, EnableFocusChange, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 use app::{ActiveModal, App, AuthData, BgEvent, Pane};
 use client::auth;
@@ -28,12 +29,28 @@ use event_modal::ModalAction;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Log to a file: anything written to stderr lands on the same TTY as the
+    // TUI and corrupts the screen.
+    let log_writer = config::Config::log_path()
+        .parent()
+        .and_then(|dir| std::fs::create_dir_all(dir).ok())
+        .and_then(|_| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(config::Config::log_path())
+                .ok()
+        });
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "azure_pim_tui=info".parse().unwrap()),
         )
-        .with_writer(io::stderr)
+        .with_ansi(false)
+        .with_writer(match log_writer {
+            Some(file) => BoxMakeWriter::new(std::sync::Mutex::new(file)),
+            None => BoxMakeWriter::new(io::sink),
+        })
         .init();
 
     let config = config::Config::load()?;
@@ -75,7 +92,7 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableFocusChange)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -83,7 +100,11 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableFocusChange,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -146,12 +167,25 @@ async fn run_app(
         // Handle input
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = crossterm::event::read()? {
+            let key = match crossterm::event::read()? {
+                Event::Key(key) => Some(key),
+                // Ratatui only draws cell diffs against its last frame. When a
+                // multiplexer switches panes the real screen may no longer match
+                // that frame, so force a full repaint.
+                Event::Resize(_, _) | Event::FocusGained => {
+                    terminal.clear()?;
+                    None
+                }
+                _ => None,
+            };
+            if let Some(key) = key {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
 
-                if app.modal != ActiveModal::None {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+                    terminal.clear()?;
+                } else if app.modal != ActiveModal::None {
                     if let Some(action) = event_modal::handle_modal_key(app, key) {
                         handle_modal_action(app, action);
                     }

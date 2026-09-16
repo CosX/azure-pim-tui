@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use azure_core::credentials::TokenCredential;
-use reqwest::Client;
+use futures::stream::{self, StreamExt};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -15,6 +17,49 @@ const API_VERSION: &str = "2020-10-01";
 const BASE_URL: &str = "https://management.azure.com";
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 const MAX_PAGES: usize = 100;
+/// Subscriptions queried at once. Each runs two list queries, so ARM sees at most twice
+/// this many requests in flight. Unbounded fan-out across many subscriptions trips 429.
+const MAX_CONCURRENT_SCOPES: usize = 4;
+/// Role definition lookups in flight at once.
+const MAX_CONCURRENT_LOOKUPS: usize = 8;
+const MAX_RETRIES: u32 = 4;
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// Sends a request, retrying on 429 Too Many Requests.
+///
+/// Waits for the server's `Retry-After` (in seconds) when present, otherwise backs off
+/// 1s, 2s, 4s, 8s. After `MAX_RETRIES` the 429 response is returned for the caller to
+/// report. A 429 means ARM did not process the request, so retrying a PUT is safe.
+async fn send_with_retry(req: RequestBuilder) -> reqwest::Result<Response> {
+    let mut attempt = 0;
+    loop {
+        // Bodies built with `.json()` are always cloneable; a streaming body is not, and
+        // gets a single attempt.
+        let Some(this_try) = req.try_clone() else {
+            return req.send().await;
+        };
+        let resp = this_try.send().await?;
+        if resp.status() != StatusCode::TOO_MANY_REQUESTS || attempt >= MAX_RETRIES {
+            return Ok(resp);
+        }
+
+        let delay = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(1 << attempt))
+            .min(MAX_RETRY_DELAY);
+        warn!(
+            "Throttled by {} (attempt {}), retrying in {delay:?}",
+            resp.url().path(),
+            attempt + 1
+        );
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}
 
 pub struct PimClient {
     client: Client,
@@ -71,7 +116,7 @@ impl PimClient {
                     .query(&[("$filter", filter), ("api-version", API_VERSION)]),
             };
 
-            let resp = req.bearer_auth(&token).send().await?;
+            let resp = send_with_retry(req.bearer_auth(&token)).await?;
 
             if !resp.status().is_success() {
                 let status = resp.status().as_u16();
@@ -133,36 +178,36 @@ impl PimClient {
             .into());
         }
 
-        // Query eligibility + active assignments for all scopes in parallel, keeping each
-        // result paired with its scope so a failure can be reported instead of swallowed.
-        let eligible_futures = scopes
-            .iter()
-            .map(|scope| async move { (scope, self.list_eligible_at_scope(scope).await) });
-        let active_futures = scopes
-            .iter()
-            .map(|scope| async move { (scope, self.list_active_at_scope(scope).await) });
-
-        let (eligible_results, active_results) = tokio::join!(
-            futures::future::join_all(eligible_futures),
-            futures::future::join_all(active_futures),
-        );
+        // Query eligibility + active assignments per scope, a few scopes at a time, keeping
+        // each result paired with its scope so a failure can be reported instead of
+        // swallowed. Completion order does not matter: roles are sorted below.
+        // Scopes are streamed by value: borrowed items here trip a higher-ranked lifetime
+        // error when the future is passed to `tokio::spawn`.
+        let results: Vec<_> = stream::iter(scopes)
+            .map(|scope| async move {
+                let (eligible, active) = tokio::join!(
+                    self.list_eligible_at_scope(&scope),
+                    self.list_active_at_scope(&scope),
+                );
+                (scope, eligible, active)
+            })
+            .buffer_unordered(MAX_CONCURRENT_SCOPES)
+            .collect()
+            .await;
 
         let mut missing_scopes = Vec::new();
+        let mut stale_status_scopes = Vec::new();
         let mut eligible: Vec<RoleEligibilityScheduleInstance> = Vec::new();
-        for (scope, result) in eligible_results {
-            match result {
+        let mut active: Vec<RoleAssignmentScheduleInstance> = Vec::new();
+        for (scope, eligible_result, active_result) in results {
+            match eligible_result {
                 Ok(items) => eligible.extend(items),
                 Err(e) => {
                     warn!("Eligibility query failed for {scope}: {e}");
                     missing_scopes.push(scope.clone());
                 }
             }
-        }
-
-        let mut stale_status_scopes = Vec::new();
-        let mut active: Vec<RoleAssignmentScheduleInstance> = Vec::new();
-        for (scope, result) in active_results {
-            match result {
+            match active_result {
                 Ok(items) => active.extend(items),
                 Err(e) => {
                     warn!("Active-assignment query failed for {scope}: {e}");
@@ -278,14 +323,14 @@ impl PimClient {
         };
 
         let token = self.get_token().await?;
-        let resp = self
-            .client
-            .put(&base)
-            .query(&[("api-version", API_VERSION)])
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(
+            self.client
+                .put(&base)
+                .query(&[("api-version", API_VERSION)])
+                .bearer_auth(&token)
+                .json(&body),
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -322,12 +367,13 @@ impl PimClient {
             let token = token.clone();
             async move {
                 let url = format!("{BASE_URL}{id}");
-                let resp = client
-                    .get(&url)
-                    .query(&[("api-version", "2022-04-01")])
-                    .bearer_auth(&token)
-                    .send()
-                    .await;
+                let resp = send_with_retry(
+                    client
+                        .get(&url)
+                        .query(&[("api-version", "2022-04-01")])
+                        .bearer_auth(&token),
+                )
+                .await;
                 let actions = match resp {
                     Ok(r) if r.status().is_success() => {
                         let text = r.text().await.unwrap_or_default();
@@ -346,8 +392,10 @@ impl PimClient {
                 (id, actions)
             }
         });
-        let results = futures::future::join_all(futs).await;
-        Ok(results.into_iter().collect())
+        Ok(stream::iter(futs)
+            .buffer_unordered(MAX_CONCURRENT_LOOKUPS)
+            .collect()
+            .await)
     }
 
     pub async fn deactivate_role(&self, role: &PimRole) -> Result<()> {
@@ -369,14 +417,14 @@ impl PimClient {
         };
 
         let token = self.get_token().await?;
-        let resp = self
-            .client
-            .put(&base)
-            .query(&[("api-version", API_VERSION)])
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(
+            self.client
+                .put(&base)
+                .query(&[("api-version", API_VERSION)])
+                .bearer_auth(&token)
+                .json(&body),
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();

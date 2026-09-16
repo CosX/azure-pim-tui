@@ -42,6 +42,13 @@ impl Config {
             .join("config.toml")
     }
 
+    pub fn log_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("azure-pim-tui")
+            .join("azure-pim-tui.log")
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
         if path.exists() {
