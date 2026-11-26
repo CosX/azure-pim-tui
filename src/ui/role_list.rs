@@ -14,6 +14,21 @@ use crate::client::models::{PimRole, RoleStatus, RoleType};
 
 const SELECTOR_WIDTH: u16 = 2;
 
+fn visible_rows(area: Rect) -> usize {
+    usize::from(area.height.saturating_sub(3)).max(1)
+}
+
+pub fn scroll_offset(previous: usize, selected: usize, len: usize, visible: usize) -> usize {
+    let offset = if selected < previous {
+        selected
+    } else if selected >= previous + visible {
+        selected + 1 - visible
+    } else {
+        previous
+    };
+    offset.min(len.saturating_sub(visible))
+}
+
 pub fn row_at(area: Rect, pos: Position) -> Option<usize> {
     let first_row = area.y + 2;
     let inside_x = pos.x > area.x && pos.x < area.right().saturating_sub(1);
@@ -69,10 +84,21 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         scope_colors(roles)
     };
 
+    let visible = visible_rows(area);
+    let offset = scroll_offset(
+        app.list_offset.get(),
+        app.selected,
+        app.filtered_indices.len(),
+        visible,
+    );
+    app.list_offset.set(offset);
+
     let rows: Vec<Row> = app
         .filtered_indices
         .iter()
         .enumerate()
+        .skip(offset)
+        .take(visible)
         .map(|(display_idx, &role_idx)| {
             let role = &roles[role_idx];
 
@@ -172,4 +198,54 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .row_highlight_style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(table, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_follows_selection_down_and_up() {
+        assert_eq!(scroll_offset(0, 4, 20, 5), 0);
+        assert_eq!(scroll_offset(0, 5, 20, 5), 1);
+        assert_eq!(scroll_offset(10, 3, 20, 5), 3);
+        assert_eq!(scroll_offset(2, 4, 20, 5), 2);
+    }
+
+    #[test]
+    fn offset_clamps_when_list_shrinks() {
+        assert_eq!(scroll_offset(15, 2, 4, 5), 0);
+        assert_eq!(scroll_offset(15, 9, 10, 5), 5);
+    }
+
+    #[test]
+    fn row_at_maps_below_header_inside_borders() {
+        let area = Rect::new(0, 3, 40, 10);
+        assert_eq!(row_at(area, Position::new(5, 4)), None);
+        assert_eq!(row_at(area, Position::new(5, 5)), Some(0));
+        assert_eq!(row_at(area, Position::new(5, 11)), Some(6));
+        assert_eq!(row_at(area, Position::new(5, 12)), None);
+        assert_eq!(row_at(area, Position::new(0, 6)), None);
+    }
+
+    #[test]
+    fn scope_colors_differ_for_adjacent_scopes() {
+        let role = |scope: &str| PimRole {
+            eligibility_id: String::new(),
+            role_definition_id: String::new(),
+            principal_id: String::new(),
+            scope: scope.to_string(),
+            role_name: String::new(),
+            scope_display_name: String::new(),
+            role_type: RoleType::Resource,
+            group_id: None,
+            status: RoleStatus::Eligible,
+            selected: false,
+        };
+        let roles = vec![role("/a"), role("/a"), role("/b"), role("/c")];
+        let colors = scope_colors(&roles);
+        assert_eq!(colors.len(), 3);
+        assert_ne!(colors["/a"], colors["/b"]);
+        assert_ne!(colors["/b"], colors["/c"]);
+    }
 }

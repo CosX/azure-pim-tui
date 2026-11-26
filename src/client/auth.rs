@@ -3,11 +3,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use azure_core::credentials::TokenCredential;
 use azure_identity::DeveloperToolsCredential;
-use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Deserialize;
 
 use super::cached_credential::CachedTokenCredential;
 use super::error::PimError;
+use super::http::{new_client, send_with_retry};
 
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 
@@ -20,6 +21,7 @@ struct JwtClaims {
 }
 
 pub struct AuthInfo {
+    pub http: reqwest::Client,
     pub credential: Arc<dyn TokenCredential>,
     pub principal_id: String,
     pub tenant_id: String,
@@ -73,11 +75,13 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
         .or(claims.unique_name)
         .unwrap_or_else(|| "unknown".to_string());
 
-    let subscriptions = fetch_subscriptions(token_str)
+    let http = new_client();
+    let subscriptions = fetch_subscriptions(&http, token_str)
         .await
         .context("Failed to fetch subscriptions")?;
 
     Ok(AuthInfo {
+        http,
         credential,
         principal_id,
         tenant_id,
@@ -86,24 +90,23 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
     })
 }
 
-async fn fetch_subscriptions(token: &str) -> Result<Vec<SubscriptionInfo>> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get("https://management.azure.com/subscriptions")
-        .query(&[("api-version", "2022-12-01")])
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("Failed to list subscriptions")?;
+async fn fetch_subscriptions(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<Vec<SubscriptionInfo>> {
+    let resp = send_with_retry(
+        client
+            .get("https://management.azure.com/subscriptions")
+            .query(&[("api-version", "2022-12-01")])
+            .bearer_auth(token),
+    )
+    .await
+    .context("Failed to list subscriptions")?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
-        return Err(PimError::Api {
-            status: status.as_u16(),
-            message: body,
-        }
-        .into());
+        return Err(PimError::api(status, &body).into());
     }
 
     let body: SubscriptionListResponse =
@@ -125,21 +128,35 @@ fn decode_jwt_claims(token: &str) -> Result<JwtClaims> {
         return Err(PimError::Parse("Invalid JWT format".to_string()).into());
     }
 
-    let payload = parts[1].replace('-', "+").replace('_', "/");
-    let decoded = STANDARD_NO_PAD
-        .decode(&payload)
-        .or_else(|_| {
-            let padded = match payload.len() % 4 {
-                2 => format!("{payload}=="),
-                3 => format!("{payload}="),
-                _ => payload.clone(),
-            };
-            STANDARD_NO_PAD.decode(&padded)
-        })
+    let decoded = URL_SAFE_NO_PAD
+        .decode(parts[1].trim_end_matches('='))
         .context("Failed to decode JWT payload")?;
 
     let claims: JwtClaims =
         serde_json::from_slice(&decoded).context("Failed to parse JWT claims")?;
 
     Ok(claims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_with_payload(json: &str) -> String {
+        format!("h.{}.s", URL_SAFE_NO_PAD.encode(json))
+    }
+
+    #[test]
+    fn decodes_claims_from_url_safe_payload() {
+        let token = token_with_payload(r#"{"oid":"o?>","tid":"t","upn":"u@x"}"#);
+        let claims = decode_jwt_claims(&token).unwrap();
+        assert_eq!(claims.oid.as_deref(), Some("o?>"));
+        assert_eq!(claims.tid.as_deref(), Some("t"));
+        assert_eq!(claims.upn.as_deref(), Some("u@x"));
+    }
+
+    #[test]
+    fn rejects_malformed_token() {
+        assert!(decode_jwt_claims("not-a-jwt").is_err());
+    }
 }

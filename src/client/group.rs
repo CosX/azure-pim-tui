@@ -7,6 +7,7 @@ use tracing::{debug, warn};
 
 use super::error::PimError;
 use super::graph_credential::GraphCredential;
+use super::http::send_with_retry;
 use super::models::*;
 
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
@@ -19,9 +20,9 @@ pub struct GroupPimClient {
 }
 
 impl GroupPimClient {
-    pub fn new(credential: Arc<GraphCredential>, principal_id: String) -> Self {
+    pub fn new(client: Client, credential: Arc<GraphCredential>, principal_id: String) -> Self {
         Self {
-            client: Client::new(),
+            client,
             credential,
             principal_id,
         }
@@ -121,22 +122,23 @@ impl GroupPimClient {
         let mut out = Vec::new();
         let mut next: Option<String> = None;
 
-        for _ in 0..MAX_PAGES {
+        for page in 0..MAX_PAGES {
             let req = match &next {
                 Some(link) => self.client.get(link),
                 None => self.client.get(url).query(&[("$filter", &filter)]),
             };
 
-            let resp = req.bearer_auth(&token).send().await?;
+            let resp = send_with_retry(req.bearer_auth(&token)).await?;
 
             if !resp.status().is_success() {
                 let status = resp.status().as_u16();
-                let message = resp.text().await.unwrap_or_default();
-                warn!("Graph {url} returned {status}: {message}");
-                if status == 400 || status == 403 || status == 404 {
+                let body = resp.text().await.unwrap_or_default();
+                let err = PimError::api(status, &body);
+                warn!("Graph {url} failed: {err}");
+                if page == 0 && (status == 400 || status == 403 || status == 404) {
                     return Ok(out);
                 }
-                return Err(PimError::Api { status, message }.into());
+                return Err(err.into());
             }
 
             let text = resp.text().await?;
@@ -149,7 +151,7 @@ impl GroupPimClient {
             }
         }
 
-        Ok(out)
+        Err(PimError::Other(format!("Result exceeded {MAX_PAGES} pages for {url}")).into())
     }
 
     async fn list_eligible(&self) -> Result<Vec<GroupEligibilityScheduleInstance>> {
@@ -174,18 +176,20 @@ impl GroupPimClient {
             let ids: Vec<String> = chunk.iter().map(|id| format!("'{id}'")).collect();
             let filter = format!("id in ({})", ids.join(","));
 
-            let resp = self
-                .client
-                .get(format!("{GRAPH_BASE}/groups"))
-                .query(&[
-                    ("$filter", &filter),
-                    ("$select", &"id,displayName".to_string()),
-                ])
-                .bearer_auth(&token)
-                .send()
-                .await?;
+            let resp = send_with_retry(
+                self.client
+                    .get(format!("{GRAPH_BASE}/groups"))
+                    .query(&[
+                        ("$filter", &filter),
+                        ("$select", &"id,displayName".to_string()),
+                    ])
+                    .bearer_auth(&token),
+            )
+            .await?;
 
-            if resp.status().is_success() {
+            if !resp.status().is_success() {
+                warn!("Group name lookup returned {}", resp.status());
+            } else {
                 let body: GraphListResponse<GraphGroup> = resp.json().await?;
                 for g in body.value {
                     if let Some(name) = g.display_name {
@@ -228,13 +232,7 @@ impl GroupPimClient {
             }),
         };
 
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(self.client.post(&url).bearer_auth(&token).json(&body)).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -246,11 +244,7 @@ impl GroupPimClient {
                 return Err(PimError::RoleAssignmentExists.into());
             }
 
-            return Err(PimError::Api {
-                status,
-                message: body_text,
-            }
-            .into());
+            return Err(PimError::api(status, &body_text).into());
         }
 
         Ok(())
@@ -276,23 +270,20 @@ impl GroupPimClient {
             schedule_info: None,
         };
 
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(self.client.post(&url).bearer_auth(&token).json(&body)).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body_text = resp.text().await.unwrap_or_default();
 
-            return Err(PimError::Api {
-                status,
-                message: body_text,
+            if body_text.contains("ActiveDurationTooShort") {
+                return Err(PimError::Other(
+                    "Role was activated too recently to deactivate".to_string(),
+                )
+                .into());
             }
-            .into());
+
+            return Err(PimError::api(status, &body_text).into());
         }
 
         Ok(())

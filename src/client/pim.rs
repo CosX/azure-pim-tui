@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use azure_core::credentials::TokenCredential;
 use futures::stream::{self, StreamExt};
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::Client;
 use tracing::warn;
 use uuid::Uuid;
 
 use super::auth::SubscriptionInfo;
 use super::error::PimError;
+use super::http::send_with_retry;
 use super::models::*;
 
 const API_VERSION: &str = "2020-10-01";
@@ -19,37 +19,6 @@ const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 const MAX_PAGES: usize = 100;
 const MAX_CONCURRENT_SCOPES: usize = 4;
 const MAX_CONCURRENT_LOOKUPS: usize = 8;
-const MAX_RETRIES: u32 = 4;
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
-
-async fn send_with_retry(req: RequestBuilder) -> reqwest::Result<Response> {
-    let mut attempt = 0;
-    loop {
-        let Some(this_try) = req.try_clone() else {
-            return req.send().await;
-        };
-        let resp = this_try.send().await?;
-        if resp.status() != StatusCode::TOO_MANY_REQUESTS || attempt >= MAX_RETRIES {
-            return Ok(resp);
-        }
-
-        let delay = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(1 << attempt))
-            .min(MAX_RETRY_DELAY);
-        warn!(
-            "Throttled by {} (attempt {}), retrying in {delay:?}",
-            resp.url().path(),
-            attempt + 1
-        );
-        tokio::time::sleep(delay).await;
-        attempt += 1;
-    }
-}
 
 pub struct PimClient {
     client: Client,
@@ -60,12 +29,13 @@ pub struct PimClient {
 
 impl PimClient {
     pub fn new(
+        client: Client,
         credential: Arc<dyn TokenCredential>,
         principal_id: String,
         subscriptions: Vec<SubscriptionInfo>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client,
             credential,
             principal_id,
             subscriptions,
@@ -90,7 +60,7 @@ impl PimClient {
         let mut out = Vec::new();
         let mut next: Option<String> = None;
 
-        for _ in 0..MAX_PAGES {
+        for page in 0..MAX_PAGES {
             let req = match &next {
                 Some(link) => self.client.get(link),
                 None => self
@@ -103,11 +73,11 @@ impl PimClient {
 
             if !resp.status().is_success() {
                 let status = resp.status().as_u16();
-                if status == 403 || status == 404 {
+                if page == 0 && (status == 403 || status == 404) {
                     return Ok(out);
                 }
-                let message = resp.text().await.unwrap_or_default();
-                return Err(PimError::Api { status, message }.into());
+                let body = resp.text().await.unwrap_or_default();
+                return Err(PimError::api(status, &body).into());
             }
 
             let text = resp.text().await?;
@@ -120,7 +90,7 @@ impl PimClient {
             }
         }
 
-        Ok(out)
+        Err(PimError::Other(format!("Result exceeded {MAX_PAGES} pages for {url}")).into())
     }
 
     async fn list_eligible_at_scope(
@@ -197,8 +167,10 @@ impl PimClient {
             .map(|s| (s.id.as_str(), s.name.as_str()))
             .collect();
 
+        let mut seen_eligibility = std::collections::HashSet::new();
         let mut roles: Vec<PimRole> = eligible
             .into_iter()
+            .filter(|e| seen_eligibility.insert(e.id.to_ascii_lowercase()))
             .map(|e| {
                 let role_name = e
                     .properties
@@ -248,8 +220,12 @@ impl PimClient {
             }
 
             for role in &mut roles {
-                if role.role_definition_id == assignment.properties.role_definition_id
-                    && role.scope == assignment.properties.scope
+                if role
+                    .role_definition_id
+                    .eq_ignore_ascii_case(&assignment.properties.role_definition_id)
+                    && role
+                        .scope
+                        .eq_ignore_ascii_case(&assignment.properties.scope)
                 {
                     role.status = RoleStatus::Active {
                         expires_at: assignment.properties.end_date_time,
@@ -320,11 +296,7 @@ impl PimClient {
                 .into());
             }
 
-            return Err(PimError::Api {
-                status,
-                message: body_text,
-            }
-            .into());
+            return Err(PimError::api(status, &body_text).into());
         }
 
         Ok(())
@@ -347,26 +319,31 @@ impl PimClient {
                         .bearer_auth(&token),
                 )
                 .await;
-                let actions = match resp {
-                    Ok(r) if r.status().is_success() => {
-                        let text = r.text().await.unwrap_or_default();
-                        serde_json::from_str::<RoleDefinitionResponse>(&text)
-                            .map(|def| {
-                                def.properties
-                                    .permissions
-                                    .into_iter()
-                                    .flat_map(|p| p.actions)
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()
+                let r = match resp {
+                    Ok(r) if r.status().is_success() => r,
+                    Ok(r) => {
+                        warn!("Role definition lookup for {id} returned {}", r.status());
+                        return None;
                     }
-                    _ => vec![],
+                    Err(e) => {
+                        warn!("Role definition lookup for {id} failed: {e}");
+                        return None;
+                    }
                 };
-                (id, actions)
+                let text = r.text().await.ok()?;
+                let def = serde_json::from_str::<RoleDefinitionResponse>(&text).ok()?;
+                let actions = def
+                    .properties
+                    .permissions
+                    .into_iter()
+                    .flat_map(|p| p.actions)
+                    .collect::<Vec<_>>();
+                Some((id, actions))
             }
         });
         Ok(stream::iter(futs)
             .buffer_unordered(MAX_CONCURRENT_LOOKUPS)
+            .filter_map(|entry| async move { entry })
             .collect()
             .await)
     }
@@ -410,11 +387,7 @@ impl PimClient {
                 .into());
             }
 
-            return Err(PimError::Api {
-                status,
-                message: body_text,
-            }
-            .into());
+            return Err(PimError::api(status, &body_text).into());
         }
 
         Ok(())

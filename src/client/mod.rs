@@ -3,5 +3,6 @@ pub mod cached_credential;
 pub mod error;
 pub mod graph_credential;
 pub mod group;
+pub mod http;
 pub mod models;
 pub mod pim;

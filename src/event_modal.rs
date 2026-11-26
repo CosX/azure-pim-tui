@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{ActiveModal, App, ModalField};
+use crate::app::{ActiveModal, App, ModalField, Pane};
+use crate::client::models::PimRole;
 
 pub fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalAction> {
     match &mut app.modal {
@@ -34,27 +35,25 @@ pub fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalAction> {
                     .parse()
                     .unwrap_or(app.config.default_duration_hours);
 
-                match &app.modal {
-                    ActiveModal::Activate { role_index, .. } => {
-                        let idx = *role_index;
-                        app.modal = ActiveModal::None;
-                        Some(ModalAction::Activate {
-                            indices: vec![idx],
-                            justification,
-                            duration_hours: dur_hours,
-                        })
-                    }
-                    ActiveModal::BulkActivate { indices, .. } => {
-                        let indices = indices.clone();
-                        app.modal = ActiveModal::None;
-                        Some(ModalAction::Activate {
-                            indices,
-                            justification,
-                            duration_hours: dur_hours,
-                        })
-                    }
-                    _ => None,
-                }
+                let keys = match &app.modal {
+                    ActiveModal::Activate { role, .. } => vec![role.clone()],
+                    ActiveModal::BulkActivate { roles, .. } => roles.clone(),
+                    _ => return None,
+                };
+                let pane = app.active_pane;
+                let roles: Vec<PimRole> = keys
+                    .iter()
+                    .filter_map(|k| app.find_role(pane, k))
+                    .filter(|r| r.status.can_activate())
+                    .cloned()
+                    .collect();
+                app.modal = ActiveModal::None;
+                (!roles.is_empty()).then_some(ModalAction::Activate {
+                    pane,
+                    roles,
+                    justification,
+                    duration_hours: dur_hours,
+                })
             }
             KeyCode::Char(c) => {
                 match focused_field {
@@ -80,11 +79,13 @@ pub fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalAction> {
             }
             _ => None,
         },
-        ActiveModal::DeactivateConfirm { role_index } => match key.code {
+        ActiveModal::DeactivateConfirm { role } => match key.code {
             KeyCode::Enter => {
-                let idx = *role_index;
+                let key = role.clone();
+                let pane = app.active_pane;
+                let role = app.find_role(pane, &key).cloned();
                 app.modal = ActiveModal::None;
-                Some(ModalAction::Deactivate { index: idx })
+                role.map(|role| ModalAction::Deactivate { pane, role })
             }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
                 app.modal = ActiveModal::None;
@@ -102,11 +103,13 @@ pub fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalAction> {
 
 pub enum ModalAction {
     Activate {
-        indices: Vec<usize>,
+        pane: Pane,
+        roles: Vec<PimRole>,
         justification: String,
         duration_hours: u32,
     },
     Deactivate {
-        index: usize,
+        pane: Pane,
+        role: PimRole,
     },
 }

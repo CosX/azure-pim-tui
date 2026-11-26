@@ -177,7 +177,7 @@ pub struct GraphGroup {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RoleType {
     Resource,
     GroupMember,
@@ -258,13 +258,22 @@ impl RoleFetch {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RoleKey {
+    pub role_definition_id: String,
+    pub scope: String,
+    pub group_id: String,
+    pub role_type: RoleType,
+}
+
 impl PimRole {
-    pub fn identity(&self) -> (&str, &str, &str) {
-        (
-            &self.role_definition_id,
-            &self.scope,
-            self.group_id.as_deref().unwrap_or(""),
-        )
+    pub fn key(&self) -> RoleKey {
+        RoleKey {
+            role_definition_id: self.role_definition_id.to_ascii_lowercase(),
+            scope: self.scope.to_ascii_lowercase(),
+            group_id: self.group_id.clone().unwrap_or_default(),
+            role_type: self.role_type.clone(),
+        }
     }
 }
 
@@ -292,5 +301,9 @@ impl RoleStatus {
 
     pub fn is_eligible(&self) -> bool {
         matches!(self, RoleStatus::Eligible)
+    }
+
+    pub fn can_activate(&self) -> bool {
+        matches!(self, RoleStatus::Eligible | RoleStatus::Failed(_))
     }
 }

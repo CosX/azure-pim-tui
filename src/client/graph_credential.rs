@@ -50,10 +50,14 @@ pub struct GraphCredential {
 }
 
 impl GraphCredential {
-    pub fn new(tenant_id: String, status_tx: Option<mpsc::UnboundedSender<String>>) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        tenant_id: String,
+        status_tx: Option<mpsc::UnboundedSender<String>>,
+    ) -> Self {
         let cached = Self::load_cached_token();
         Self {
-            client: reqwest::Client::new(),
+            client,
             tenant_id,
             cached: Mutex::new(cached),
             status_tx,
@@ -84,9 +88,12 @@ impl GraphCredential {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(content) = serde_json::to_string_pretty(token) {
-            let _ = std::fs::write(&path, content);
-            debug!("Saved Graph token cache to {}", path.display());
+        let Ok(content) = serde_json::to_string_pretty(token) else {
+            return;
+        };
+        match write_private(&path, content.as_bytes()) {
+            Ok(()) => debug!("Saved Graph token cache to {}", path.display()),
+            Err(e) => warn!("Failed to save Graph token cache: {e}"),
         }
     }
 
@@ -282,5 +289,47 @@ impl GraphCredential {
 
             return Err(PimError::Auth(format!("Unexpected response: {body}")).into());
         }
+    }
+}
+
+#[cfg(unix)]
+fn write_private(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(content)
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, content)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn token_file_is_owner_only_even_if_it_existed() {
+        let dir = std::env::temp_dir().join(format!("pim-tui-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("graph_token.json");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private(&path, b"new").unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

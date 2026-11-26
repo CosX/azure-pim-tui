@@ -32,6 +32,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent, size: Rect) {
             let Some(row) = role_list::row_at(areas.role_list, pos) else {
                 return;
             };
+            let row = row + app.list_offset.get();
             if row >= app.filtered_indices.len() {
                 return;
             }

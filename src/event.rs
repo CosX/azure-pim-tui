@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{ActiveModal, App, ModalField};
+use crate::app::{ActiveModal, App};
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -55,12 +55,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         }
 
         KeyCode::Char('d') => {
-            if let Some(idx) = app.selected_role_index() {
-                let role = &app.active_roles()[idx];
-                if role.status.is_active() {
-                    app.modal = ActiveModal::DeactivateConfirm { role_index: idx };
-                }
-            }
+            app.open_deactivate_modal();
             EventAction::None
         }
 
@@ -72,19 +67,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         }
 
         KeyCode::Char('A') => {
-            let selected = app.selected_indices();
-            let eligible: Vec<usize> = selected
-                .into_iter()
-                .filter(|&i| app.active_roles()[i].status.is_eligible())
-                .collect();
-            if !eligible.is_empty() {
-                app.modal = ActiveModal::BulkActivate {
-                    indices: eligible,
-                    justification: app.config.default_justification.clone(),
-                    duration: app.config.default_duration_hours.to_string(),
-                    focused_field: ModalField::Justification,
-                };
-            }
+            app.open_bulk_activate_modal();
             EventAction::None
         }
 

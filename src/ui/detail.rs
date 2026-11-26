@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -17,9 +17,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 expires_at: Some(exp),
             } => {
                 let remaining = *exp - Utc::now();
-                let hours = remaining.num_hours();
-                let mins = remaining.num_minutes() % 60;
-                format!("Active (expires in {hours}h {mins:02}m)")
+                if remaining.num_seconds() > 0 {
+                    let hours = remaining.num_hours();
+                    let mins = remaining.num_minutes() % 60;
+                    format!("Active (expires in {hours}h {mins:02}m)")
+                } else {
+                    "Active (expired)".to_string()
+                }
             }
             _ => role.status.display().to_string(),
         };
@@ -115,7 +119,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 .title(" Details ")
                 .border_style(Style::default().fg(border_color)),
         )
-        .scroll((app.detail_scroll as u16, 0));
+        .wrap(Wrap { trim: false })
+        .scroll((u16::try_from(app.detail_scroll).unwrap_or(u16::MAX), 0));
 
     f.render_widget(paragraph, area);
 }

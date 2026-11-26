@@ -11,12 +11,14 @@ use crate::app::{ActiveModal, App, ModalField};
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     match &app.modal {
         ActiveModal::Activate {
-            role_index,
+            role,
             justification,
             duration,
             focused_field,
         } => {
-            let role = &app.active_roles()[*role_index];
+            let Some(role) = app.find_role(app.active_pane, role) else {
+                return;
+            };
             render_activate_modal(
                 f,
                 area,
@@ -30,7 +32,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             );
         }
         ActiveModal::BulkActivate {
-            indices,
+            roles,
             justification,
             duration,
             focused_field,
@@ -44,11 +46,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 duration,
                 focused_field,
                 true,
-                indices.len(),
+                roles.len(),
             );
         }
-        ActiveModal::DeactivateConfirm { role_index } => {
-            let role = &app.active_roles()[*role_index];
+        ActiveModal::DeactivateConfirm { role } => {
+            let Some(role) = app.find_role(app.active_pane, role) else {
+                return;
+            };
             render_deactivate_modal(f, area, &role.role_name, &role.scope_display_name);
         }
         ActiveModal::Help => {
