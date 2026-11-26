@@ -31,6 +31,7 @@ pub fn render(f: &mut Frame, area: Rect) {
         help_line("v", "Cycle view: all/eligible/active"),
         help_line("?", "Toggle help"),
         help_line("Ctrl+L", "Redraw screen"),
+        help_line("Mouse", "Click select, double-click activate"),
         help_line("q / Ctrl+C", "Quit"),
         Line::from(""),
         Line::from(Span::styled(

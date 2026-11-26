@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Row, Table},
@@ -8,7 +10,48 @@ use ratatui::{
 };
 
 use crate::app::{App, Pane};
-use crate::client::models::{RoleStatus, RoleType};
+use crate::client::models::{PimRole, RoleStatus, RoleType};
+
+/// Width of the selection marker column.
+const SELECTOR_WIDTH: u16 = 2;
+
+/// Returns the display row (index into `filtered_indices`) under `pos`, if `pos`
+/// is on a data row. Does not check against the number of rows.
+///
+/// The table is rendered without scroll state, so row N is always drawn at
+/// `N` rows below the header.
+pub fn row_at(area: Rect, pos: Position) -> Option<usize> {
+    // Inside the borders, below the header row.
+    let first_row = area.y + 2;
+    let inside_x = pos.x > area.x && pos.x < area.right().saturating_sub(1);
+    let inside_y = pos.y >= first_row && pos.y < area.bottom().saturating_sub(1);
+    (inside_x && inside_y).then(|| (pos.y - first_row) as usize)
+}
+
+/// Whether `pos` is in the selection marker column.
+pub fn in_selector_column(area: Rect, pos: Position) -> bool {
+    pos.x > area.x && pos.x <= area.x + SELECTOR_WIDTH
+}
+
+const SCOPE_PALETTE: [Color; 8] = [
+    Color::Indexed(109),
+    Color::Indexed(144),
+    Color::Indexed(139),
+    Color::Indexed(108),
+    Color::Indexed(180),
+    Color::Indexed(146),
+    Color::Indexed(138),
+    Color::Indexed(152),
+];
+
+fn scope_colors(roles: &[PimRole]) -> HashMap<&str, Color> {
+    let mut colors = HashMap::new();
+    for role in roles {
+        let next = SCOPE_PALETTE[colors.len() % SCOPE_PALETTE.len()];
+        colors.entry(role.scope.as_str()).or_insert(next);
+    }
+    colors
+}
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let is_groups = app.active_pane == Pane::Groups;
@@ -28,6 +71,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .bottom_margin(0);
 
     let roles = app.active_roles();
+    let scope_colors = if is_groups {
+        HashMap::new()
+    } else {
+        scope_colors(roles)
+    };
 
     let rows: Vec<Row> = app
         .filtered_indices
@@ -37,6 +85,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             let role = &roles[role_idx];
 
             let selector = if role.selected { "●" } else { " " };
+
+            let col2_style = scope_colors
+                .get(role.scope.as_str())
+                .map(|&c| Style::default().fg(c))
+                .unwrap_or_default();
 
             let (col1, col2) = if is_groups {
                 let access = match role.role_type {
@@ -87,7 +140,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             Row::new(vec![
                 Line::from(selector),
                 Line::from(col1),
-                Line::from(col2),
+                Line::from(Span::styled(col2, col2_style)),
                 Line::from(status_span),
                 Line::from(expires),
             ])
@@ -96,7 +149,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let widths = [
-        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(SELECTOR_WIDTH),
         ratatui::layout::Constraint::Percentage(35),
         ratatui::layout::Constraint::Percentage(25),
         ratatui::layout::Constraint::Length(12),

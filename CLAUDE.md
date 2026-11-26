@@ -74,4 +74,5 @@ Async event-driven TUI using ratatui + crossterm + tokio. The app runs a 250ms t
 default_justification = "Local development"
 default_duration_hours = 8
 auto_refresh_secs = 60
+mouse = true
 ```

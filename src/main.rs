@@ -3,6 +3,7 @@ mod client;
 mod config;
 mod event;
 mod event_modal;
+mod event_mouse;
 mod ui;
 
 use std::io;
@@ -11,11 +12,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
-    event::{DisableFocusChange, EnableFocusChange, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+        KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 use app::{ActiveModal, App, AuthData, BgEvent, Pane};
@@ -55,6 +59,7 @@ async fn main() -> Result<()> {
 
     let config = config::Config::load()?;
     let auto_refresh = Duration::from_secs(config.auto_refresh_secs);
+    let mouse_enabled = config.mouse;
     let mut app = App::new(config);
 
     // Spawn auth in background
@@ -93,6 +98,9 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableFocusChange)?;
+    if mouse_enabled {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -102,6 +110,7 @@ async fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         DisableFocusChange,
         LeaveAlternateScreen
     )?;
@@ -169,6 +178,12 @@ async fn run_app(
         if crossterm::event::poll(timeout)? {
             let key = match crossterm::event::read()? {
                 Event::Key(key) => Some(key),
+                Event::Mouse(mouse) => {
+                    let size = terminal.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    event_mouse::handle_mouse(app, mouse, area);
+                    None
+                }
                 // Ratatui only draws cell diffs against its last frame. When a
                 // multiplexer switches panes the real screen may no longer match
                 // that frame, so force a full repaint.

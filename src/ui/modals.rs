@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -58,6 +58,41 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+/// Screen area of the activation modal within the full frame `area`.
+fn activate_modal_area(area: Rect) -> Rect {
+    centered_rect(50, 40, area)
+}
+
+/// Line index (inside the border) of the Justification field. Duration is on
+/// the next line. Must match the line order built in `render_activate_modal`.
+fn justification_line(is_bulk: bool) -> u16 {
+    // Single: Role, Scope, blank. Bulk: summary, blank.
+    if is_bulk {
+        2
+    } else {
+        3
+    }
+}
+
+/// Returns the activation modal field at `pos`, if any.
+pub fn activate_field_at(area: Rect, is_bulk: bool, pos: Position) -> Option<ModalField> {
+    let modal = activate_modal_area(area);
+    let inside_x = pos.x > modal.x && pos.x < modal.right().saturating_sub(1);
+    let inside_y = pos.y > modal.y && pos.y < modal.bottom().saturating_sub(1);
+    if !inside_x || !inside_y {
+        return None;
+    }
+    let line = pos.y - modal.y - 1;
+    let just = justification_line(is_bulk);
+    if line == just {
+        Some(ModalField::Justification)
+    } else if line == just + 1 {
+        Some(ModalField::Duration)
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_activate_modal(
     f: &mut Frame,
@@ -70,7 +105,7 @@ fn render_activate_modal(
     is_bulk: bool,
     count: usize,
 ) {
-    let modal_area = centered_rect(50, 40, area);
+    let modal_area = activate_modal_area(area);
     f.render_widget(Clear, modal_area);
 
     let title = if is_bulk {

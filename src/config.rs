@@ -10,6 +10,9 @@ pub struct Config {
     pub default_duration_hours: u32,
     #[serde(default = "default_auto_refresh_secs")]
     pub auto_refresh_secs: u64,
+    /// Capture mouse events. Disable to get the terminal's native text selection back.
+    #[serde(default = "default_mouse")]
+    pub mouse: bool,
 }
 
 fn default_justification() -> String {
@@ -24,12 +27,17 @@ fn default_auto_refresh_secs() -> u64 {
     60
 }
 
+fn default_mouse() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             default_justification: default_justification(),
             default_duration_hours: default_duration_hours(),
             auto_refresh_secs: default_auto_refresh_secs(),
+            mouse: default_mouse(),
         }
     }
 }

@@ -56,17 +56,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
 
         // Activate
         KeyCode::Char('a') | KeyCode::Enter => {
-            if let Some(idx) = app.selected_role_index() {
-                let role = &app.active_roles()[idx];
-                if role.status.is_eligible() {
-                    app.modal = ActiveModal::Activate {
-                        role_index: idx,
-                        justification: app.config.default_justification.clone(),
-                        duration: app.config.default_duration_hours.to_string(),
-                        focused_field: ModalField::Justification,
-                    };
-                }
-            }
+            app.open_activate_modal();
             EventAction::None
         }
 

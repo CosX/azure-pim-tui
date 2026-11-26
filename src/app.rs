@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use azure_core::credentials::TokenCredential;
 use chrono::{DateTime, Utc};
@@ -139,6 +140,8 @@ pub struct App {
     pub last_refresh: Option<DateTime<Utc>>,
     pub role_permissions: HashMap<String, Vec<String>>,
     pub detail_scroll: usize,
+    /// Time and display row of the last left click, for double-click detection
+    pub last_click: Option<(Instant, usize)>,
 }
 
 impl App {
@@ -168,6 +171,7 @@ impl App {
             last_refresh: None,
             role_permissions: HashMap::new(),
             detail_scroll: 0,
+            last_click: None,
         }
     }
 
@@ -262,6 +266,28 @@ impl App {
         let new = (self.selected as i32 + delta).rem_euclid(len);
         self.selected = new as usize;
         self.detail_scroll = 0;
+    }
+
+    /// Selects the role at `display_idx` in the filtered list, if it exists.
+    pub fn select(&mut self, display_idx: usize) {
+        if display_idx < self.filtered_indices.len() && display_idx != self.selected {
+            self.selected = display_idx;
+            self.detail_scroll = 0;
+        }
+    }
+
+    /// Opens the activation modal for the selected role if it is eligible.
+    pub fn open_activate_modal(&mut self) {
+        if let Some(idx) = self.selected_role_index() {
+            if self.active_roles()[idx].status.is_eligible() {
+                self.modal = ActiveModal::Activate {
+                    role_index: idx,
+                    justification: self.config.default_justification.clone(),
+                    duration: self.config.default_duration_hours.to_string(),
+                    focused_field: ModalField::Justification,
+                };
+            }
+        }
     }
 
     pub fn select_first(&mut self) {

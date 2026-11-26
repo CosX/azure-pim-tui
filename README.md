@@ -87,6 +87,19 @@ azure-pim-tui
 
 In the activation modal: `Tab` switches fields, `Enter` confirms, `Esc` cancels.
 
+### Mouse
+
+| Action | Effect |
+|--------|--------|
+| Click row | Select role |
+| Double-click row | Activate role |
+| Click `●` column | Toggle selection for bulk ops |
+| Click `Resources` / `Groups` tab | Switch pane |
+| Scroll wheel | Move selection in role list / scroll detail panel |
+| Click field in activation modal | Focus field |
+
+Mouse capture disables the terminal's native text selection. Hold `Shift` (or `Option` in iTerm2/Terminal.app) while dragging to select text, or set `mouse = false` in the config.
+
 ## Configuration
 
 A config file is created on first run at `~/.config/azure-pim-tui/config.toml`:
@@ -95,6 +108,7 @@ A config file is created on first run at `~/.config/azure-pim-tui/config.toml`:
 default_justification = "Local development"
 default_duration_hours = 8
 auto_refresh_secs = 60
+mouse = true
 ```
 
 ## How it works
