@@ -102,7 +102,13 @@ Mouse capture disables the terminal's native text selection. Hold `Shift` (or `O
 
 ## Configuration
 
-A config file is created on first run at `~/.config/azure-pim-tui/config.toml`:
+A config file is created on first run at `azure-pim-tui/config.toml` in your OS config directory:
+
+| OS | Path |
+|----|------|
+| Linux | `~/.config/azure-pim-tui/config.toml` |
+| macOS | `~/Library/Application Support/azure-pim-tui/config.toml` |
+| Windows | `%APPDATA%\azure-pim-tui\config.toml` |
 
 ```toml
 default_justification = "Local development"

@@ -51,9 +51,9 @@ Always explain tradeoffs when recommending alternatives.
 - Missing backpressure
 
 **Security**
-- Unsanitized data rendered to terminal (missing `sanitize_for_terminal()`)
+- Raw writes to stdout outside ratatui (ratatui strips control characters; direct writes don't)
 - Secrets in logs or error messages
-- Unvalidated input from Service Bus messages or connection strings
+- Unvalidated values from API responses or the config file
 - HTTP responses trusted without status code checks
 
 **Testing**
@@ -63,9 +63,11 @@ Always explain tradeoffs when recommending alternatives.
 
 ## Project-Specific Checks
 
-- Sentinel strings in `main.rs` — new sentinels must be unique and not collide with existing ones
-- Topic fan-out — operations targeting topics must enumerate subscriptions; missing this is a correctness bug
-- Path casing — management plane uses `/Subscriptions/` (PascalCase), data plane uses `/subscriptions/` (lowercase); mixing these causes silent failures
-- `sanitize_for_terminal()` — must be called before rendering any Service Bus message content
-- `bg_running` guard — key handlers that spawn async work must check this to prevent concurrent ops
-- `normalize_path()` — must be called in all data plane methods; missing it causes 404s on subscription paths
+- Role references: anything that outlives a single event (modals, background results, selections) must use `RoleKey` + `Pane`, never indices into `roles`/`group_roles`. Refreshes re-sort those vectors.
+- Fetch results must carry the generation from `App::begin_fetch` so superseded results are dropped.
+- Activation/deactivation must target the signed-in user's `principal_id` (JWT `oid`) and, for ARM, the `linkedRoleEligibilityScheduleId` of the chosen eligibility.
+- ARM queries must be scoped (`/subscriptions/{id}/providers/...`) with `assignedTo('{principalId}') and atScope()`. Compare ARM IDs and scopes case-insensitively.
+- Paging: a 403/404 on the first page means "no access"; on a later page, or running past `MAX_PAGES`, it is an error and must surface as a missing scope.
+- Secrets: the Graph refresh token is written by `write_private` (0600). No token or `Authorization` header may reach logs, the status bar or error strings.
+- Terminal state: changes to setup or teardown go through `src/terminal.rs` so the panic hook restores the same state.
+- No code comments in Rust source (CLAUDE.md rule).

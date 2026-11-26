@@ -4,63 +4,36 @@ description: 'Evaluate code for security risks. Use when: security review, secur
 
 # Security Check
 
-Evaluate the provided code for security risks. Assume hostile input at all boundaries — Service Bus message bodies, connection strings, API responses, and user input from the TUI are all untrusted.
+This app activates privileged Azure roles for the signed-in user. The main risks are acting on the wrong role, leaking tokens, and trusting API responses too much.
 
-## Terminal Injection
+## Privileged actions
 
-This is the highest-priority risk in a TUI application.
+- Activation and deactivation must act on exactly the role the user confirmed. Modals and results hold `RoleKey`, re-resolved at submit time. Any index-based reference into role vectors is a Critical finding.
+- `principalId` in request bodies must come from the JWT `oid` of the signed-in user, never from API response data.
+- Bulk activation may only include roles visible in the current filtered view.
 
-- **All Service Bus message content must pass through `sanitize_for_terminal()` before rendering.** Message bodies, custom properties, message IDs, correlation IDs — anything that arrived over the network.
-- `sanitize_for_terminal()` strips CSI (`\x1b[`), OSC (`\x1b]`), and other ANSI escape sequences that could hijack the terminal, rewrite files, or execute commands on some terminal emulators.
-- Missing sanitization = terminal injection vulnerability. Flag this as Critical.
+## Secrets
 
-```rust
-// Required before any render of external content
-use crate::ui::sanitize::sanitize_for_terminal;
-let safe = sanitize_for_terminal(&msg.body, true);
-```
+- Tokens: management tokens live in memory (`CachedTokenCredential`). The Graph token and refresh token are cached at `<config_dir>/azure-pim-tui/graph_token.json` and must be written with `write_private` (mode 0600 on Unix, also fixed on existing files).
+- Never log tokens, `Authorization` headers or token endpoint response bodies. Errors from the token endpoint may be logged by `error`/`error_description` only.
+- The log file (`azure-pim-tui.log`) rotates at 5MB. Don't add per-request logging at `info` or above.
 
-## Input Validation
+## Input and output
 
-- Connection strings: must be fully parsed and validated before use. Partial parsing that falls back to defaults is a misconfiguration risk.
-- Namespace names and entity paths: validate format before constructing URLs. An attacker-controlled path segment could redirect requests.
-- Message count inputs (peek count, bulk operation counts): validate range before use. Unchecked values passed to loop bounds cause runaway operations.
-- TOML config values loaded from disk: treat as untrusted — a tampered config file is a realistic attack vector on shared systems.
+- OData `$filter` values are built from the JWT `oid` and IDs returned by Graph. Never interpolate user-typed text into a filter or URL.
+- Justification text is sent as a JSON string field via `serde`. Don't build JSON by hand.
+- ratatui drops control characters when drawing, so API strings are safe to render inside widgets. Anything written to stdout directly (`src/terminal.rs`) must be a constant escape sequence.
 
-## Secret Handling
+## HTTP
 
-- SAS keys and Azure AD tokens must never appear in:
-  - Log output (`tracing` spans or events)
-  - Error messages returned to the UI
-  - Status bar messages
-  - Panic messages
-- When logging auth errors, log the error category only — not the token or key value
-- Connection strings stored in TOML config are sensitive — verify they are stored in OS-appropriate locations (`config.rs:dirs_fallback()`) and not in the working directory or repo
-
-## HTTP Response Trust
-
-- Always check `resp.status().as_u16()` before parsing the body
-- A `200 OK` with an unexpected body should fail loudly, not silently succeed with zero data
-- `404` responses must be mapped to `ServiceBusError::NotFound` — not treated as empty results
-- Azure API error bodies contain diagnostic info — include them in `ServiceBusError::Api { status, body }` for debuggability, but never forward them raw to the UI without sanitization
-
-## Deserialization
-
-- Untrusted JSON from Service Bus data plane: `serde_json` deserializes into typed structs — verify field types match expectations before use
-- ATOM XML from management plane: parsed with raw string extraction — validate that extracted values are within expected ranges before use
-- `BrokerProperties` header is JSON — deserialize defensively, treat missing fields as `None` not as errors
-
-## Concurrency and State
-
-- Race condition between `bg_running` flag and operation dispatch: the flag must be checked atomically with the sentinel set. The current architecture (single-threaded event loop) makes this safe — do not introduce multi-threaded access to `App` state.
-- Cancel tokens: verify that cancelled operations do not leave `bg_running = true` permanently (would lock the UI)
+- Check `status()` before parsing a body. Build API errors with `PimError::api(status, &body)` so the UI shows `code: message`, not raw JSON.
+- First-page 403/404 means "no access, no roles". Later-page failures and `MAX_PAGES` overflow are errors and must not be reported as complete results.
+- All requests go through the shared client from `client::http::new_client()`, which has connect and request timeouts.
 
 ## Checklist
 
-- [ ] All Service Bus message content passes through `sanitize_for_terminal()` before render
-- [ ] No secrets (keys, tokens, connection strings) in log output or error messages
-- [ ] HTTP response status checked before body is parsed
-- [ ] 404 responses handled distinctly from other errors
-- [ ] User-supplied counts and paths validated before use
-- [ ] Config values loaded from disk treated as untrusted
-- [ ] `bg_running` cannot be permanently stuck `true` after cancellation or error
+- [ ] No index-based role references in modals or background events
+- [ ] No secrets in logs, status messages or error strings
+- [ ] Token cache written owner-only
+- [ ] No user input in URLs or OData filters
+- [ ] Status checked before body parsing; partial results flagged

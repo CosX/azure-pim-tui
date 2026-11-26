@@ -10,7 +10,7 @@ Evaluate the provided code against the Rust standards enforced in this project. 
 
 - Use enums to model states — not booleans, string flags, or `Option<Option<T>>`
 - Encode invariants in types so invalid states are unrepresentable
-- Avoid stringly-typed logic (sentinel strings are acceptable at the event loop boundary only — do not introduce new ones in business logic)
+- Avoid stringly-typed logic: use enums (`Pane`, `RoleStatus`, `RoleType`, `BgEvent`) rather than matching on status strings
 - Use `newtype` wrappers to prevent mixing semantically different values of the same type
 
 ## Ownership and Borrowing
@@ -23,7 +23,7 @@ Evaluate the provided code against the Rust standards enforced in this project. 
 ## Error Handling
 
 - Use `Result<T, E>` everywhere — never `unwrap()` or `expect()` in non-test code unless the invariant is proven at the call site
-- Use `thiserror` for library/module error types (already present in this project as `ServiceBusError`)
+- Use `thiserror` for library/module error types (`PimError` in `src/client/error.rs`)
 - Use `anyhow` only at application boundary (top-level handlers, `main`)
 - Propagate errors with `?` — do not silently discard them
 - Log errors before discarding — a swallowed error is a hidden failure
@@ -54,27 +54,23 @@ Evaluate the provided code against the Rust standards enforced in this project. 
 ## What Good Looks Like in This Codebase
 
 ```rust
-// Good: type encodes state
-pub enum FocusPanel { Tree, Detail, Messages }
+pub enum RoleStatus { Eligible, Active { expires_at: Option<DateTime<Utc>> }, Activating, Failed(String) }
 
-// Bad: boolean flag for state
-let is_tree_focused: bool = true;
+let is_active: bool = true;
 
-// Good: error with context
-return Err(ServiceBusError::Xml(format!(
-    "expected <title> element in entry, got: {:?}", &entry_xml[..100]
-)));
+return Err(PimError::api(status, &body).into());
 
-// Bad: silent discard
-let _ = parse_optional_i64(xml, "Count"); // why is the result ignored?
+let _ = resp.text().await;
 
-// Good: clone justified, client is Send + cheap to clone
-let dp = app.data_plane.clone().unwrap();
-tokio::spawn(async move { dp.peek(&path).await });
+let auth = auth.clone();
+tokio::spawn(async move { resource_client(&auth).fetch_roles().await });
 
-// Bad: clone of large state struct
-let app_clone = app.clone(); // App is not designed to be cloned
+BgEvent::ActivationResult { pane, key: role.key(), result }
+
+BgEvent::ActivationResult { index: 3, result }
 ```
+
+The first line of each pair is the preferred form; the second is what to avoid: a bool for state, a silently discarded result, an index that goes stale after a refresh.
 
 ## Checklist
 
