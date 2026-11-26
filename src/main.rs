@@ -33,8 +33,6 @@ use event_modal::ModalAction;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Log to a file: anything written to stderr lands on the same TTY as the
-    // TUI and corrupts the screen.
     let log_writer = config::Config::log_path()
         .parent()
         .and_then(|dir| std::fs::create_dir_all(dir).ok())
@@ -62,13 +60,10 @@ async fn main() -> Result<()> {
     let mouse_enabled = config.mouse;
     let mut app = App::new(config);
 
-    // Spawn auth in background
     let tx = app.bg_tx.clone();
     tokio::spawn(async move {
         match auth::get_auth_info().await {
             Ok(info) => {
-                // Create a channel for GraphCredential to send status messages
-                // (device code prompts) back to the TUI
                 let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
                 let bg_tx = tx.clone();
                 tokio::spawn(async move {
@@ -94,7 +89,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableFocusChange)?;
@@ -106,7 +100,6 @@ async fn main() -> Result<()> {
 
     let result = run_app(&mut terminal, &mut app, auto_refresh).await;
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -137,7 +130,6 @@ async fn run_app(
     loop {
         terminal.draw(|f| ui::layout::render(f, app))?;
 
-        // Process background events (non-blocking)
         while let Ok(bg_event) = app.bg_rx.try_recv() {
             let should_fetch = matches!(bg_event, BgEvent::AuthReady(Ok(_)));
             let roles_loaded = matches!(bg_event, BgEvent::RolesLoaded(Ok(_)));
@@ -150,30 +142,25 @@ async fn run_app(
             }
         }
 
-        // Trigger resource fetch if needed
         if needs_fetch {
             spawn_fetch_resources(app);
             needs_fetch = false;
         }
 
-        // Trigger permissions fetch after roles load
         if needs_permissions_fetch {
             spawn_fetch_permissions(app);
             needs_permissions_fetch = false;
         }
 
-        // Trigger group fetch on first visit to Groups pane
         if app.needs_group_fetch() && app.auth.is_some() {
             spawn_fetch_groups(app);
         }
 
-        // Auto-refresh timer (only for resource roles in resource pane)
         if last_refresh.elapsed() >= auto_refresh && app.auth.is_some() && !app.loading {
             spawn_fetch_resources(app);
             last_refresh = Instant::now();
         }
 
-        // Handle input
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if crossterm::event::poll(timeout)? {
             let key = match crossterm::event::read()? {
@@ -184,9 +171,6 @@ async fn run_app(
                     event_mouse::handle_mouse(app, mouse, area);
                     None
                 }
-                // Ratatui only draws cell diffs against its last frame. When a
-                // multiplexer switches panes the real screen may no longer match
-                // that frame, so force a full repaint.
                 Event::Resize(_, _) | Event::FocusGained => {
                     terminal.clear()?;
                     None
@@ -218,9 +202,7 @@ async fn run_app(
                             }
                             last_refresh = Instant::now();
                         }
-                        EventAction::PaneSwitch => {
-                            // Group fetch triggered above via needs_group_fetch()
-                        }
+                        EventAction::PaneSwitch => {}
                         EventAction::None => {}
                     }
                 }
@@ -378,7 +360,6 @@ fn handle_modal_action(app: &mut App, action: ModalAction) {
         }
     }
 
-    // Trigger refresh after activation/deactivation
     match pane {
         Pane::Resources => spawn_fetch_resources(app),
         Pane::Groups => {

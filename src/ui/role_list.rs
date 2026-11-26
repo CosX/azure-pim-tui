@@ -12,23 +12,15 @@ use ratatui::{
 use crate::app::{App, Pane};
 use crate::client::models::{PimRole, RoleStatus, RoleType};
 
-/// Width of the selection marker column.
 const SELECTOR_WIDTH: u16 = 2;
 
-/// Returns the display row (index into `filtered_indices`) under `pos`, if `pos`
-/// is on a data row. Does not check against the number of rows.
-///
-/// The table is rendered without scroll state, so row N is always drawn at
-/// `N` rows below the header.
 pub fn row_at(area: Rect, pos: Position) -> Option<usize> {
-    // Inside the borders, below the header row.
     let first_row = area.y + 2;
     let inside_x = pos.x > area.x && pos.x < area.right().saturating_sub(1);
     let inside_y = pos.y >= first_row && pos.y < area.bottom().saturating_sub(1);
     (inside_x && inside_y).then(|| (pos.y - first_row) as usize)
 }
 
-/// Whether `pos` is in the selection marker column.
 pub fn in_selector_column(area: Rect, pos: Position) -> bool {
     pos.x > area.x && pos.x <= area.x + SELECTOR_WIDTH
 }

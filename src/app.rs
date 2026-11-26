@@ -34,7 +34,6 @@ pub enum BgEvent {
     },
     AuthReady(Result<AuthData, String>),
     RolePermissionsLoaded(Result<HashMap<String, Vec<String>>, String>),
-    /// Status message from graph credential (device code flow)
     GraphStatus(String),
 }
 
@@ -113,15 +112,12 @@ pub enum ModalField {
 }
 
 pub struct App {
-    // Resource roles
     pub roles: Vec<PimRole>,
-    // Group roles
     pub group_roles: Vec<PimRole>,
     pub groups_loaded: bool,
     pub groups_loading: bool,
     pub group_status_message: String,
 
-    // Shared UI state
     pub active_pane: Pane,
     pub filtered_indices: Vec<usize>,
     pub selected: usize,
@@ -140,7 +136,6 @@ pub struct App {
     pub last_refresh: Option<DateTime<Utc>>,
     pub role_permissions: HashMap<String, Vec<String>>,
     pub detail_scroll: usize,
-    /// Time and display row of the last left click, for double-click detection
     pub last_click: Option<(Instant, usize)>,
 }
 
@@ -175,7 +170,6 @@ impl App {
         }
     }
 
-    /// Returns the role list for the active pane
     pub fn active_roles(&self) -> &[PimRole] {
         match self.active_pane {
             Pane::Resources => &self.roles,
@@ -183,7 +177,6 @@ impl App {
         }
     }
 
-    /// Returns a mutable reference to the role list for the active pane
     pub fn active_roles_mut(&mut self) -> &mut Vec<PimRole> {
         match self.active_pane {
             Pane::Resources => &mut self.roles,
@@ -191,7 +184,6 @@ impl App {
         }
     }
 
-    /// Returns the status message for the active pane
     pub fn active_status(&self) -> &str {
         match self.active_pane {
             Pane::Resources => &self.status_message,
@@ -199,7 +191,6 @@ impl App {
         }
     }
 
-    /// Is the active pane loading?
     pub fn active_loading(&self) -> bool {
         match self.active_pane {
             Pane::Resources => self.loading,
@@ -215,7 +206,6 @@ impl App {
         self.update_filtered_indices();
     }
 
-    /// Returns true if groups need to be fetched (first visit)
     pub fn needs_group_fetch(&self) -> bool {
         self.active_pane == Pane::Groups && !self.groups_loaded && !self.groups_loading
     }
@@ -268,7 +258,6 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    /// Selects the role at `display_idx` in the filtered list, if it exists.
     pub fn select(&mut self, display_idx: usize) {
         if display_idx < self.filtered_indices.len() && display_idx != self.selected {
             self.selected = display_idx;
@@ -276,7 +265,6 @@ impl App {
         }
     }
 
-    /// Opens the activation modal for the selected role if it is eligible.
     pub fn open_activate_modal(&mut self) {
         if let Some(idx) = self.selected_role_index() {
             if self.active_roles()[idx].status.is_eligible() {
@@ -302,7 +290,6 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    /// Toggles selection on the current role and returns `true` if the role is now selected.
     pub fn toggle_selected(&mut self) -> bool {
         if let Some(&i) = self.filtered_indices.get(self.selected) {
             let new_val = !self.active_roles_mut()[i].selected;
@@ -335,8 +322,6 @@ impl App {
             .count()
     }
 
-    /// Owned copy of the highlighted role's identity, for restoring the cursor
-    /// after the role list is replaced by a refresh.
     fn selected_identity(&self) -> Option<(String, String, String)> {
         self.selected_role().map(|r| {
             let (rd, scope, group) = r.identity();
@@ -344,11 +329,6 @@ impl App {
         })
     }
 
-    /// Folds a fetch result into the previous list.
-    ///
-    /// A refresh is not authoritative about scopes it failed to query, so roles under a
-    /// missing scope are carried over rather than dropped, and roles whose active-status
-    /// query failed keep the status they already had. Multi-select marks survive too.
     fn merge_fetch(old: &[PimRole], fetch: RoleFetch, pane: Pane) -> Vec<PimRole> {
         let under = |role: &PimRole, scopes: &[String]| {
             scopes.iter().any(|prefix| role.scope.starts_with(prefix))
@@ -389,7 +369,6 @@ impl App {
         roles
     }
 
-    /// Status line for a fetch that only partly succeeded.
     fn partial_status(fetch: &RoleFetch) -> String {
         let missing = fetch.missing_scopes.len();
         let stale = fetch.stale_status_scopes.len();
@@ -400,8 +379,6 @@ impl App {
         }
     }
 
-    /// Rebuilds the filtered view and puts the cursor back on `ident` if it is
-    /// still visible, so a refresh does not jump the highlight to another role.
     fn refilter_keeping_cursor(&mut self, ident: Option<(String, String, String)>) {
         self.update_filtered_indices();
         let Some((rd, scope, group)) = ident else {

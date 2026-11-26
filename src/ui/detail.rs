@@ -78,7 +78,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         ]));
         lines.extend(error_line);
 
-        // Show permissions for resource roles
         if role.role_type == RoleType::Resource {
             if let Some(actions) = app.role_permissions.get(&role.role_definition_id) {
                 lines.push(Line::from(""));

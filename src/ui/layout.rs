@@ -8,8 +8,6 @@ use ratatui::{
 
 use crate::app::{ActiveModal, App, Pane};
 
-/// Screen regions of the main layout. Shared by rendering and mouse hit-testing
-/// so both always agree on where things are.
 pub struct Areas {
     pub title: Rect,
     pub tabs: Rect,
@@ -21,9 +19,9 @@ pub struct Areas {
 
 pub fn areas(size: Rect) -> Areas {
     let chunks = Layout::vertical([
-        Constraint::Length(3), // Title bar
-        Constraint::Min(8),    // Content area
-        Constraint::Length(1), // Status bar
+        Constraint::Length(3),
+        Constraint::Min(8),
+        Constraint::Length(1),
     ])
     .split(size);
 
@@ -34,7 +32,6 @@ pub fn areas(size: Rect) -> Areas {
     ])
     .split(chunks[0]);
 
-    // Content area: role list (left) | detail panel (right)
     let content = Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[1]);
 
@@ -48,14 +45,10 @@ pub fn areas(size: Rect) -> Areas {
     }
 }
 
-/// Leading padding before the first tab label inside the tabs block.
 const TAB_LEAD: &str = " ";
-/// Gap between tab labels.
 const TAB_GAP: &str = "  ";
 
-/// Returns the pane whose tab label is at `pos`, if any.
 pub fn pane_tab_at(tabs: Rect, pos: Position) -> Option<Pane> {
-    // Labels sit on the single inner row, just inside the left border.
     if pos.y != tabs.y + 1 || pos.x <= tabs.x || pos.x >= tabs.right().saturating_sub(1) {
         return None;
     }
@@ -82,7 +75,6 @@ pub fn render(f: &mut Frame, app: &App) {
     crate::ui::detail::render(f, areas.detail, app);
     crate::ui::status_bar::render(f, areas.status_bar, app);
 
-    // Modal overlay
     if app.modal != ActiveModal::None {
         crate::ui::modals::render(f, size, app);
     }
@@ -109,7 +101,6 @@ fn render_title_bar(f: &mut Frame, areas: &Areas, app: &App) {
             .border_style(Style::default().fg(Color::Cyan)),
     );
 
-    // Pane tabs
     let resources_style = if app.active_pane == Pane::Resources {
         Style::default()
             .fg(Color::Cyan)

@@ -1,16 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// --- API Response wrappers ---
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiListResponse<T> {
     pub value: Vec<T>,
     pub next_link: Option<String>,
 }
-
-// --- Role Eligibility (what roles the user CAN activate) ---
 
 #[derive(Debug, Deserialize)]
 pub struct RoleEligibilityScheduleInstance {
@@ -26,8 +22,6 @@ pub struct EligibilityProperties {
     pub principal_id: String,
     pub expanded_properties: Option<ExpandedProperties>,
 }
-
-// --- Role Assignment (currently active roles) ---
 
 #[derive(Debug, Deserialize)]
 pub struct RoleAssignmentScheduleInstance {
@@ -46,8 +40,6 @@ pub struct AssignmentProperties {
     pub expanded_properties: Option<ExpandedProperties>,
 }
 
-// --- Shared expanded properties ---
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpandedProperties {
@@ -61,8 +53,6 @@ pub struct ExpandedProperties {
 pub struct RoleDefinitionInfo {
     pub display_name: Option<String>,
 }
-
-// --- Role definition (full, for permissions) ---
 
 #[derive(Debug, Deserialize)]
 pub struct RoleDefinitionResponse {
@@ -94,8 +84,6 @@ pub struct PrincipalInfo {
     pub display_name: Option<String>,
 }
 
-// --- Activation request body ---
-
 #[derive(Debug, Serialize)]
 pub struct ActivationRequestBody {
     pub properties: ActivationProperties,
@@ -126,8 +114,6 @@ pub struct ExpirationInfo {
     pub duration: String,
 }
 
-// --- Graph API models for PIM for Groups ---
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphListResponse<T> {
@@ -142,7 +128,7 @@ pub struct GroupEligibilityScheduleInstance {
     pub id: String,
     pub group_id: String,
     pub principal_id: String,
-    pub access_id: String, // "member" or "owner"
+    pub access_id: String,
     pub member_type: Option<String>,
 }
 
@@ -184,16 +170,12 @@ pub struct GroupExpirationInfo {
     pub duration: String,
 }
 
-// --- Graph group display name response ---
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphGroup {
     pub id: String,
     pub display_name: Option<String>,
 }
-
-// --- App-level enriched model ---
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleType {
@@ -234,7 +216,6 @@ pub struct PimRole {
     pub selected: bool,
 }
 
-/// Display order for resource roles: scope, then role name, active first.
 pub fn sort_resource_roles(roles: &mut [PimRole]) {
     roles.sort_by(|a, b| {
         a.scope_display_name
@@ -248,7 +229,6 @@ pub fn sort_resource_roles(roles: &mut [PimRole]) {
     });
 }
 
-/// Display order for group roles: group name, then member/owner.
 pub fn sort_group_roles(roles: &mut [PimRole]) {
     roles.sort_by(|a, b| {
         a.role_name
@@ -257,16 +237,10 @@ pub fn sort_group_roles(roles: &mut [PimRole]) {
     });
 }
 
-/// Outcome of a role fetch. A fetch can succeed partially: some scopes answer while
-/// others throttle or fail, and the caller must not treat the gap as "role removed".
 #[derive(Debug, Default)]
 pub struct RoleFetch {
     pub roles: Vec<PimRole>,
-    /// Scope prefixes whose eligibility query failed — their roles are absent from
-    /// `roles` entirely and the previous list should be kept for them.
     pub missing_scopes: Vec<String>,
-    /// Scope prefixes whose active-assignment query failed — their roles are present
-    /// but every one is reported `Eligible`, so the previous status should be kept.
     pub stale_status_scopes: Vec<String>,
 }
 
@@ -285,8 +259,6 @@ impl RoleFetch {
 }
 
 impl PimRole {
-    /// Identity that survives a refresh. `eligibility_id` cannot be used: activating a
-    /// role swaps the eligibility schedule for an assignment schedule with a new id.
     pub fn identity(&self) -> (&str, &str, &str) {
         (
             &self.role_definition_id,

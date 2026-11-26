@@ -34,12 +34,9 @@ impl GroupPimClient {
     pub async fn fetch_group_roles(&self) -> Result<RoleFetch> {
         let (eligible, active) = tokio::join!(self.list_eligible(), self.list_active());
 
-        // An eligibility failure means the whole list is unknown — propagate so the caller
-        // keeps what it already has rather than rendering an empty pane.
         let eligible = eligible?;
         debug!("Found {} eligible group roles", eligible.len());
 
-        // Group roles share one scope prefix, so an empty string marks "all of them".
         let mut stale_status_scopes = Vec::new();
         let active = match active {
             Ok(a) => a,
@@ -54,7 +51,6 @@ impl GroupPimClient {
             return Ok(RoleFetch::complete(vec![]));
         }
 
-        // Collect unique group IDs to resolve display names
         let group_ids: Vec<String> = eligible
             .iter()
             .map(|e| e.group_id.clone())
@@ -95,7 +91,6 @@ impl GroupPimClient {
             })
             .collect();
 
-        // Mark active
         for assignment in &active {
             for role in &mut roles {
                 if role.group_id.as_deref() == Some(&assignment.group_id)
@@ -120,18 +115,12 @@ impl GroupPimClient {
         })
     }
 
-    /// GETs a paged Graph list endpoint, following `@odata.nextLink` until exhausted.
-    ///
-    /// 400/403/404 mean the tenant does not offer PIM for Groups (or the user cannot read
-    /// it) and yield an empty list. Anything else — throttling especially — is an error,
-    /// so a transient failure does not read as "the user has no group roles".
     async fn list_paged<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<Vec<T>> {
         let token = self.get_token().await?;
         let filter = format!("principalId eq '{}'", self.principal_id);
         let mut out = Vec::new();
         let mut next: Option<String> = None;
 
-        // Bounded so a server echoing the same nextLink cannot hang the refresh.
         for _ in 0..MAX_PAGES {
             let req = match &next {
                 Some(link) => self.client.get(link),
@@ -181,7 +170,6 @@ impl GroupPimClient {
         let token = self.get_token().await?;
         let mut names = HashMap::new();
 
-        // Batch with $filter using 'in' operator (up to 15 per request)
         for chunk in group_ids.chunks(15) {
             let ids: Vec<String> = chunk.iter().map(|id| format!("'{id}'")).collect();
             let filter = format!("id in ({})", ids.join(","));

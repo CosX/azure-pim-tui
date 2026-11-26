@@ -52,10 +52,8 @@ struct SubscriptionListResponse {
 pub async fn get_auth_info() -> Result<AuthInfo> {
     let raw: Arc<dyn TokenCredential> =
         DeveloperToolsCredential::new(None).context("Failed to create Azure credential")?;
-    // Wrap with a token cache so we don't spawn `az`/Python on every HTTP call.
     let credential: Arc<dyn TokenCredential> = Arc::new(CachedTokenCredential::new(raw));
 
-    // Get a token to extract principal ID and user info from JWT claims
     let token_response = credential
         .get_token(&[MANAGEMENT_SCOPE], None)
         .await
@@ -63,7 +61,6 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
 
     let token_str = token_response.token.secret();
 
-    // Extract principal ID and display name from JWT
     let claims = decode_jwt_claims(token_str)?;
     let principal_id = claims
         .oid
@@ -76,7 +73,6 @@ pub async fn get_auth_info() -> Result<AuthInfo> {
         .or(claims.unique_name)
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Fetch subscriptions via REST (replaces `az account list`)
     let subscriptions = fetch_subscriptions(token_str)
         .await
         .context("Failed to fetch subscriptions")?;

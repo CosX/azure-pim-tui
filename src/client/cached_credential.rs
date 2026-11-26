@@ -6,10 +6,6 @@ use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions}
 use time::{Duration, OffsetDateTime};
 use tokio::sync::Mutex;
 
-/// Wraps a [`TokenCredential`] with a per-scope token cache so we don't
-/// re-invoke the underlying credential (e.g. shelling out to `az`) on every
-/// HTTP request. Concurrent callers for the same scope set serialize on the
-/// mutex; the first refresh populates the cache and the rest reuse it.
 #[derive(Debug)]
 pub struct CachedTokenCredential {
     inner: Arc<dyn TokenCredential>,
@@ -141,7 +137,6 @@ mod tests {
         for _ in 0..3 {
             cached.get_token(&["s"], None).await.unwrap();
         }
-        // Each call sees expiry within the 5-min refresh window, so cache never returns.
         assert_eq!(inner.calls.load(Ordering::SeqCst), 3);
     }
 }

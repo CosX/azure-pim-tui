@@ -19,7 +19,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let is_loading = app.active_loading();
     let status_msg = app.active_status();
 
-    // Status message
     let status_color = if is_loading {
         Color::Yellow
     } else if status_msg.starts_with("Failed") || status_msg.starts_with("Auth failed") {
@@ -37,7 +36,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     ]));
     f.render_widget(status, chunks[0]);
 
-    // Counts
     let counts = Paragraph::new(Line::from(vec![
         Span::raw(format!(
             "{} eligible, {} active",
@@ -51,7 +49,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     ]));
     f.render_widget(counts, chunks[1]);
 
-    // Key hints
     let hints = Paragraph::new(Line::from(vec![
         Span::styled(
             "Tab",

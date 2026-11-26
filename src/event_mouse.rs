@@ -6,13 +6,9 @@ use ratatui::layout::{Position, Rect};
 use crate::app::{ActiveModal, App};
 use crate::ui::{layout, modals, role_list};
 
-/// Max gap between two clicks on the same row to count as a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-/// Lines scrolled in the detail panel per wheel notch.
 const DETAIL_SCROLL_STEP: usize = 3;
 
-/// Handles a mouse event. `size` is the full terminal area, used to recompute
-/// the same layout the renderer drew.
 pub fn handle_mouse(app: &mut App, mouse: MouseEvent, size: Rect) {
     let pos = Position::new(mouse.column, mouse.row);
 
@@ -27,7 +23,6 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent, size: Rect) {
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(pane) = layout::pane_tab_at(areas.tabs, pos) {
                 if pane != app.active_pane {
-                    // Group fetch on first visit is picked up by the main loop.
                     app.switch_pane();
                     app.last_click = None;
                 }

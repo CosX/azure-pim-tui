@@ -8,8 +8,6 @@ use tracing::{debug, info, warn};
 
 use super::error::PimError;
 
-/// Microsoft Graph PowerShell app ID — first-party Microsoft app with broad
-/// Graph permissions pre-consented, including PIM for Groups.
 const CLIENT_ID: &str = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
 
 const GRAPH_SCOPES: &str = "https://graph.microsoft.com/PrivilegedAccess.ReadWrite.AzureADGroup https://graph.microsoft.com/PrivilegedEligibilitySchedule.Read.AzureADGroup https://graph.microsoft.com/GroupMember.Read.All offline_access";
@@ -41,7 +39,7 @@ struct TokenErrorResponse {
 struct CachedToken {
     access_token: String,
     refresh_token: Option<String>,
-    expires_at: u64, // unix timestamp
+    expires_at: u64,
 }
 
 pub struct GraphCredential {
@@ -101,14 +99,12 @@ impl GraphCredential {
     pub async fn get_token(&self) -> Result<String> {
         let mut cached = self.cached.lock().await;
 
-        // Check if we have a valid cached token
         if let Some(ref token) = *cached {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
 
-            // Token still valid (with 5 min buffer)
             if now + 300 < token.expires_at {
                 debug!(
                     "Using cached Graph token (expires in {}s)",
@@ -117,7 +113,6 @@ impl GraphCredential {
                 return Ok(token.access_token.clone());
             }
 
-            // Try refresh
             if let Some(ref refresh_token) = token.refresh_token {
                 debug!("Attempting token refresh");
                 match self.refresh_token(refresh_token).await {
@@ -134,7 +129,6 @@ impl GraphCredential {
             }
         }
 
-        // Need fresh auth via device code flow
         let new_token = self.device_code_flow().await?;
         let result = new_token.access_token.clone();
         *cached = Some(new_token);
@@ -210,11 +204,9 @@ impl GraphCredential {
             .await
             .context("Failed to parse device code response")?;
 
-        // Notify the TUI to display the code
         self.send_status(dc_resp.message.clone());
         info!("{}", dc_resp.message);
 
-        // Poll for token
         let token_url = format!(
             "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
             self.tenant_id
@@ -262,7 +254,6 @@ impl GraphCredential {
                 });
             }
 
-            // Check if still waiting for user
             if let Ok(err_resp) = serde_json::from_str::<TokenErrorResponse>(&body) {
                 match err_resp.error.as_str() {
                     "authorization_pending" => {

@@ -17,24 +17,14 @@ const API_VERSION: &str = "2020-10-01";
 const BASE_URL: &str = "https://management.azure.com";
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 const MAX_PAGES: usize = 100;
-/// Subscriptions queried at once. Each runs two list queries, so ARM sees at most twice
-/// this many requests in flight. Unbounded fan-out across many subscriptions trips 429.
 const MAX_CONCURRENT_SCOPES: usize = 4;
-/// Role definition lookups in flight at once.
 const MAX_CONCURRENT_LOOKUPS: usize = 8;
 const MAX_RETRIES: u32 = 4;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
-/// Sends a request, retrying on 429 Too Many Requests.
-///
-/// Waits for the server's `Retry-After` (in seconds) when present, otherwise backs off
-/// 1s, 2s, 4s, 8s. After `MAX_RETRIES` the 429 response is returned for the caller to
-/// report. A 429 means ARM did not process the request, so retrying a PUT is safe.
 async fn send_with_retry(req: RequestBuilder) -> reqwest::Result<Response> {
     let mut attempt = 0;
     loop {
-        // Bodies built with `.json()` are always cloneable; a streaming body is not, and
-        // gets a single attempt.
         let Some(this_try) = req.try_clone() else {
             return req.send().await;
         };
@@ -91,12 +81,6 @@ impl PimClient {
         Ok(token_response.token.secret().to_string())
     }
 
-    /// GETs a paged ARM list endpoint, following `nextLink` until exhausted.
-    ///
-    /// 403/404 mean the signed-in user cannot read PIM at this scope, which is a normal
-    /// outcome and yields an empty list. Every other non-2xx (notably 429 throttling and
-    /// 5xx) is an error: reporting it as "no roles here" is what makes roles vanish on a
-    /// refresh.
     async fn list_paged<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
@@ -106,7 +90,6 @@ impl PimClient {
         let mut out = Vec::new();
         let mut next: Option<String> = None;
 
-        // Bounded so a server echoing the same nextLink cannot hang the refresh.
         for _ in 0..MAX_PAGES {
             let req = match &next {
                 Some(link) => self.client.get(link),
@@ -140,7 +123,6 @@ impl PimClient {
         Ok(out)
     }
 
-    /// List eligible role schedules at a specific scope, filtered to this principal.
     async fn list_eligible_at_scope(
         &self,
         scope: &str,
@@ -151,7 +133,6 @@ impl PimClient {
         self.list_paged(&url, &filter).await
     }
 
-    /// List active assignment schedule instances at a specific scope, filtered to this principal.
     async fn list_active_at_scope(
         &self,
         scope: &str,
@@ -164,7 +145,6 @@ impl PimClient {
     }
 
     pub async fn fetch_roles(&self) -> Result<RoleFetch> {
-        // Build scope list from subscriptions
         let scopes: Vec<String> = self
             .subscriptions
             .iter()
@@ -178,11 +158,6 @@ impl PimClient {
             .into());
         }
 
-        // Query eligibility + active assignments per scope, a few scopes at a time, keeping
-        // each result paired with its scope so a failure can be reported instead of
-        // swallowed. Completion order does not matter: roles are sorted below.
-        // Scopes are streamed by value: borrowed items here trip a higher-ranked lifetime
-        // error when the future is passed to `tokio::spawn`.
         let results: Vec<_> = stream::iter(scopes)
             .map(|scope| async move {
                 let (eligible, active) = tokio::join!(
@@ -216,7 +191,6 @@ impl PimClient {
             }
         }
 
-        // Build subscription name lookup
         let sub_names: std::collections::HashMap<&str, &str> = self
             .subscriptions
             .iter()
@@ -261,7 +235,6 @@ impl PimClient {
             })
             .collect();
 
-        // Mark active roles
         for assignment in &active {
             let is_activated = assignment
                 .properties
@@ -448,7 +421,6 @@ impl PimClient {
     }
 }
 
-/// Extract subscription ID from a scope string like /subscriptions/{id}/...
 fn extract_sub_id(scope: &str) -> Option<&str> {
     let parts: Vec<&str> = scope.split('/').collect();
     parts

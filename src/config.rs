@@ -10,7 +10,6 @@ pub struct Config {
     pub default_duration_hours: u32,
     #[serde(default = "default_auto_refresh_secs")]
     pub auto_refresh_secs: u64,
-    /// Capture mouse events. Disable to get the terminal's native text selection back.
     #[serde(default = "default_mouse")]
     pub mouse: bool,
 }

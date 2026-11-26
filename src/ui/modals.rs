@@ -58,15 +58,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// Screen area of the activation modal within the full frame `area`.
 fn activate_modal_area(area: Rect) -> Rect {
     centered_rect(50, 40, area)
 }
 
-/// Line index (inside the border) of the Justification field. Duration is on
-/// the next line. Must match the line order built in `render_activate_modal`.
 fn justification_line(is_bulk: bool) -> u16 {
-    // Single: Role, Scope, blank. Bulk: summary, blank.
     if is_bulk {
         2
     } else {
@@ -74,7 +70,6 @@ fn justification_line(is_bulk: bool) -> u16 {
     }
 }
 
-/// Returns the activation modal field at `pos`, if any.
 pub fn activate_field_at(area: Rect, is_bulk: bool, pos: Position) -> Option<ModalField> {
     let modal = activate_modal_area(area);
     let inside_x = pos.x > modal.x && pos.x < modal.right().saturating_sub(1);

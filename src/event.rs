@@ -2,15 +2,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{ActiveModal, App, ModalField};
 
-/// Returns true if a refresh should be triggered
 pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
-    // Global keys
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return EventAction::None;
     }
 
-    // Detail panel scroll
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => {
@@ -25,7 +22,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
         }
     }
 
-    // Filter mode input
     if app.filtering {
         return handle_filter_key(app, key);
     }
@@ -36,7 +32,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Navigation
         KeyCode::Char('j') | KeyCode::Down => {
             app.move_selection(1);
             EventAction::None
@@ -54,13 +49,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Activate
         KeyCode::Char('a') | KeyCode::Enter => {
             app.open_activate_modal();
             EventAction::None
         }
 
-        // Deactivate
         KeyCode::Char('d') => {
             if let Some(idx) = app.selected_role_index() {
                 let role = &app.active_roles()[idx];
@@ -71,7 +64,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Toggle selection — advance cursor only when selecting, not deselecting
         KeyCode::Char(' ') => {
             if app.toggle_selected() {
                 app.move_selection(1);
@@ -79,7 +71,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Bulk activate
         KeyCode::Char('A') => {
             let selected = app.selected_indices();
             let eligible: Vec<usize> = selected
@@ -97,30 +88,25 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> EventAction {
             EventAction::None
         }
 
-        // Refresh
         KeyCode::Char('r') | KeyCode::F(5) => EventAction::Refresh,
 
-        // Filter
         KeyCode::Char('/') => {
             app.filtering = true;
             app.filter_text.clear();
             EventAction::None
         }
 
-        // Switch pane
         KeyCode::Tab => {
             app.switch_pane();
             EventAction::PaneSwitch
         }
 
-        // View cycle
         KeyCode::Char('v') => {
             app.view_filter = app.view_filter.cycle();
             app.update_filtered_indices();
             EventAction::None
         }
 
-        // Help
         KeyCode::Char('?') => {
             app.modal = ActiveModal::Help;
             EventAction::None

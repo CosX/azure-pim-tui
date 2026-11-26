@@ -22,6 +22,10 @@ cargo clippy --all-targets -- -D warnings -A dead_code -A unused
 
 Both must pass cleanly before committing. CI enforces the same checks.
 
+## Code Style
+
+- No code comments. Do not write `//`, `///`, `//!` or `/* */` comments in Rust source. Express intent through names, types and small functions instead.
+
 ## Available Skills
 
 - `.claude/skills/azure-api.md` — Add a new Azure API call (ARM or Graph)
